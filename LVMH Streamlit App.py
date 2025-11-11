@@ -7,19 +7,21 @@ import time
 
 # ================== CONFIG ==================
 URL = "https://www.lvmh.com/api/search"
-HEADERS = {
-    "accept": "*/*",
-    "content-type": "application/json",
-    "origin": "https://www.lvmh.com",
-    "referer": "https://www.lvmh.com/en/join-us/our-job-offers",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-}
-
 REGIONS_ALL = ["America", "Asia Pacific", "Europe", "Middle East / Africa"]
 HITS_PER_PAGE = 50
+SESSION_MAX_AGE = 30 * 60  # 30 minutes
 
-# ================== FUNCTIONS ==================
+# ================== GLOBAL SESSION ==================
+SESSION = None
+SESSION_TIMESTAMP = None
+
 def create_session():
+    """Create or refresh the requests session with automatic cookies."""
+    global SESSION, SESSION_TIMESTAMP
+    now = time.time()
+    if SESSION and (now - SESSION_TIMESTAMP) < SESSION_MAX_AGE:
+        return SESSION  # reuse existing session
+
     session = requests.Session()
     retry_strategy = Retry(
         total=5,
@@ -29,14 +31,26 @@ def create_session():
     )
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("https://", adapter)
-    session.headers.update(HEADERS)
-    # Get cookies automatically
-    session.get("https://www.lvmh.com/en/join-us/our-job-offers")
+
+    session.headers.update({
+        "accept": "*/*",
+        "content-type": "application/json",
+        "origin": "https://www.lvmh.com",
+        "referer": "https://www.lvmh.com/en/join-us/our-job-offers",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+    })
+
+    # Refresh cookies by visiting the job offers page
+    session.get("https://www.lvmh.com/en/join-us/our-job-offers", timeout=30)
+
+    SESSION = session
+    SESSION_TIMESTAMP = time.time()
     return session
 
+# ================== FETCHING FUNCTIONS ==================
 def fetch_jobs_page(session, regions, keyword=None, page=0):
-    # regions: list of strings like ["America", "Europe"]
-    facet_filters = [[f"geographicAreaFilter:{r}" for r in regions]]  # correct API format
+    """Fetch a single page of jobs from the API."""
+    facet_filters = [[f"geographicAreaFilter:{r}" for r in regions]]
     payload = {
         "queries": [
             {
@@ -60,6 +74,7 @@ def fetch_jobs_page(session, regions, keyword=None, page=0):
     return resp.json()
 
 def extract_jobs(data):
+    """Extract jobs from the JSON response."""
     jobs = []
     for query_result in data.get("results", []):
         for hit in query_result.get("hits", []):
@@ -67,6 +82,7 @@ def extract_jobs(data):
     return jobs
 
 def scrape_jobs(keyword, selected_regions, progress_bar=None):
+    """Scrape all jobs for given regions and keyword, with optional progress bar."""
     session = create_session()
     all_jobs = []
     regions_to_use = selected_regions if selected_regions else REGIONS_ALL
@@ -81,10 +97,10 @@ def scrape_jobs(keyword, selected_regions, progress_bar=None):
         total_fetched += len(jobs)
         page += 1
         if progress_bar:
-            # estimate fraction of 2500 jobs for visual progress
+            # estimate fraction of 2500 jobs for progress
             progress_bar.progress(min(total_fetched / 2500, 1.0))
-        time.sleep(0.5)
-    return pd.DataFrame(all_jobs)  # keep original columns as-is
+        time.sleep(0.5)  # polite delay
+    return pd.DataFrame(all_jobs)
 
 # ================== STREAMLIT UI ==================
 st.title("LVMH Job Scraper")
@@ -98,7 +114,7 @@ if st.button("Fetch Jobs"):
     with st.spinner("Scraping jobs... this may take a few minutes..."):
         try:
             df = scrape_jobs(keyword_input.strip() if keyword_input else None, regions_input, progress_bar)
-            progress_bar.empty()  # remove progress bar when done
+            progress_bar.empty()
             if not df.empty:
                 st.success(f"Found {len(df)} jobs!")
                 st.dataframe(df)
