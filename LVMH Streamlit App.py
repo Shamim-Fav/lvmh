@@ -30,16 +30,19 @@ def create_session():
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("https://", adapter)
     session.headers.update(HEADERS)
+    # Get cookies automatically
     session.get("https://www.lvmh.com/en/join-us/our-job-offers")
     return session
 
 def fetch_jobs_page(session, regions, keyword=None, page=0):
+    # regions: list of strings like ["America", "Europe"]
+    facet_filters = [[f"geographicAreaFilter:{r}" for r in regions]]  # correct API format
     payload = {
         "queries": [
             {
                 "indexName": "PRD-en-us-timestamp-desc",
                 "params": {
-                    "facetFilters": [regions],
+                    "facetFilters": facet_filters,
                     "facets": ["businessGroupFilter", "cityFilter", "contractFilter", "countryRegionFilter"],
                     "filters": "category:job",
                     "highlightPostTag": "__/ais-highlight__",
@@ -78,12 +81,13 @@ def scrape_jobs(keyword, selected_regions, progress_bar=None):
         total_fetched += len(jobs)
         page += 1
         if progress_bar:
-            progress_bar.progress(min(total_fetched / 2500, 1.0))  # progress as fraction
-        time.sleep(0.5)  # polite delay
-    return pd.DataFrame(all_jobs)  # keep original JSON structure (columns)
+            # estimate fraction of 2500 jobs for visual progress
+            progress_bar.progress(min(total_fetched / 2500, 1.0))
+        time.sleep(0.5)
+    return pd.DataFrame(all_jobs)  # keep original columns as-is
 
 # ================== STREAMLIT UI ==================
-st.title("LVMH Job Scraper with Progress Bar")
+st.title("LVMH Job Scraper")
 
 # Inputs
 keyword_input = st.text_input("Job Title / Keywords (leave blank for all)")
@@ -98,7 +102,7 @@ if st.button("Fetch Jobs"):
             if not df.empty:
                 st.success(f"Found {len(df)} jobs!")
                 st.dataframe(df)
-                # Download Excel
+                # Excel download
                 df.to_excel("lvmh_jobs.xlsx", index=False)
                 with open("lvmh_jobs.xlsx", "rb") as f:
                     st.download_button("Download Excel", data=f, file_name="lvmh_jobs.xlsx")
