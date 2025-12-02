@@ -6,7 +6,7 @@ from urllib3.util.retry import Retry
 import time
 import io
 
-# ================== CONFIG (unchanged) ==================
+# ================== CONFIG ==================
 URL = "https://www.lvmh.com/api/search"
 HEADERS = {
     "accept": "*/*",
@@ -19,11 +19,9 @@ HEADERS = {
 REGIONS_ALL = ["America", "Asia Pacific", "Europe", "Middle East / Africa"]
 HITS_PER_PAGE = 50
 
-# ================== SCRAPING AND UTILITY FUNCTIONS (unchanged) ==================
-# ... (create_session, fetch_jobs_page, extract_jobs, scrape_jobs remain as in the last successful script)
+# ================== FUNCTIONS ==================
 
 def create_session():
-    # ... (function body remains the same)
     session = requests.Session()
     retry_strategy = Retry(
         total=5,
@@ -38,7 +36,6 @@ def create_session():
     return session
 
 def fetch_jobs_page(session, regions, keyword=None, page=0):
-    # ... (function body remains the same)
     facet_filters = [[f"geographicAreaFilter:{r}" for r in regions]]
     payload = {
         "queries": [
@@ -63,7 +60,6 @@ def fetch_jobs_page(session, regions, keyword=None, page=0):
     return resp.json()
 
 def extract_jobs(data):
-    # ... (function body remains the same)
     jobs = []
     for query_result in data.get("results", []):
         for hit in query_result.get("hits", []):
@@ -71,7 +67,6 @@ def extract_jobs(data):
     return jobs
 
 def scrape_jobs(keyword, selected_regions, progress_bar=None):
-    # ... (function body remains the same)
     session = create_session()
     all_jobs = []
     regions_to_use = selected_regions if selected_regions else REGIONS_ALL
@@ -90,22 +85,17 @@ def scrape_jobs(keyword, selected_regions, progress_bar=None):
         time.sleep(0.5)
     return pd.DataFrame(all_jobs)
 
-
-# ================== MODIFIED ENCODING AND FORMATTING FUNCTIONS ==================
-
-# *** MODIFIED FIX_ENCODING FUNCTION ***
+# Encoding Fix Function
 def fix_encoding(text):
-    """Attempts to fix double-encoded UTF-8 strings like 'MahÃ©' using a byte swap."""
+    """Attempts to fix double-encoded UTF-8 strings like 'MahÃ©'."""
     if isinstance(text, str):
         try:
-            # 1. Encode the current (bad) Python string into bytes using Latin-1.
-            # 2. Decode those bytes back into a Python string using UTF-8.
-            # This correctly interprets the two bytes that were incorrectly decoded as two characters.
             return text.encode('latin1').decode('utf8')
         except (UnicodeDecodeError, UnicodeEncodeError):
             return text
     return text
 
+# Function to select and rename the desired columns and apply encoding fix
 def create_filtered_df(df):
     """Selects the desired columns, renames them, and applies encoding correction."""
     if df.empty:
@@ -114,7 +104,6 @@ def create_filtered_df(df):
     # Apply Encoding Fix to known problematic columns
     for col in ['city', 'description', 'name']:
         if col in df.columns:
-            # Use .str.replace for fast, vectorized cleaning of the entire Series
             df[col] = df[col].apply(fix_encoding)
 
     # MAPPING for final requested titles
@@ -129,23 +118,23 @@ def create_filtered_df(df):
         'link': 'Apply URL'
     }
     
-    # Filter columns to ensure they exist and then select/rename
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_filtered = df[existing_cols].rename(columns=column_map)
     
-    # Clean up highlight tags from description
     if 'Description' in df_filtered.columns:
         df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
     return df_filtered
 
+# *** CRITICAL FIX HERE ***
 @st.cache_data
 def convert_df_to_csv(df):
-    """Converts DataFrame to CSV for download, explicitly using UTF-8."""
-    # Explicitly using UTF-8 here is CRITICAL for the downloaded file to be correct
-    return df.to_csv(index=False, encoding='utf-8').encode('utf-8')
+    """Converts DataFrame to CSV for download, using UTF-8-SIG for Excel compatibility."""
+    # FIX: Use 'utf-8-sig' to include the BOM, resolving CSV display errors in Excel/other programs.
+    return df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
-# ================== STREAMLIT UI (MODIFIED TO APPLY FIX TO RAW DATA TOO) ==================
+
+# ================== STREAMLIT UI ==================
 st.title("LVMH Job Scraper with Dual Download")
 
 # Inputs
@@ -162,11 +151,8 @@ if st.button("Fetch Jobs"):
             if not df_raw.empty:
                 st.success(f"Found {len(df_raw)} jobs!")
                 
-                # --- Prepare DataFrames ---
-                # df_filtered contains the fixed/renamed columns
                 df_filtered = create_filtered_df(df_raw.copy()) 
                 
-                # Display the cleaned/filtered columns for user view
                 st.dataframe(df_filtered, use_container_width=True) 
                 
                 # --- Dual Download Buttons ---
