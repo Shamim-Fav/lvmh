@@ -11,7 +11,7 @@ import numpy as np # For conditional logic (np.where)
 
 # Set the page icon (favicon) and title
 st.set_page_config(
-    page_title="💼 LVMH Job Scraper", # EMOJI ADDED HERE
+    page_title="LVMH Job Scraper",
     page_icon="💼" # Using the briefcase emoji
 )
 
@@ -260,7 +260,7 @@ def create_zip_archive(df_raw, df_filtered):
 
 # ================== STREAMLIT UI ==================
 
-st.title("💼 LVMH Job Scraper", # EMOJI ADDED HERE)
+st.title("💼 LVMH Job Scraper")
 
 # Inputs
 keyword_input = st.text_input("Job Title / Keywords (leave blank for all)")
@@ -300,6 +300,7 @@ if st.button("Fetch Jobs"):
                 st.warning("No jobs found.")
         except Exception as e:
             st.error(f"An error occurred during scraping: {e}")
+
 
 
 
