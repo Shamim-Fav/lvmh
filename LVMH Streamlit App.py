@@ -5,24 +5,34 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
 import io
-import numpy as np # <-- ADD THIS LINE
+import zipfile
+import ast # For safely evaluating salary strings
+import numpy as np # For conditional logic (np.where)
+
+# Set the page icon (favicon) and title
+st.set_page_config(
+    page_title="LVMH Job Scraper", 
+    page_icon="💼", 
+    layout="wide"
+)
 
 # ================== CONFIG ==================
 URL = "https://www.lvmh.com/api/search"
-HEADERS = {
-    "accept": "*/*",
-    "content-type": "application/json",
-    "origin": "https://www.lvmh.com",
-    "referer": "https://www.lvmh.com/en/join-us/our-job-offers",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-}
-
 REGIONS_ALL = ["America", "Asia Pacific", "Europe", "Middle East / Africa"]
 HITS_PER_PAGE = 50
+SESSION_MAX_AGE = 30 * 60 # 30 minutes
 
-# ================== FUNCTIONS ==================
+# ================== GLOBAL SESSION ==================
+SESSION = None
+SESSION_TIMESTAMP = None
 
 def create_session():
+    """Create or refresh the requests session with automatic cookies."""
+    global SESSION, SESSION_TIMESTAMP
+    now = time.time()
+    if SESSION and (now - SESSION_TIMESTAMP) < SESSION_MAX_AGE:
+        return SESSION # reuse existing session
+
     session = requests.Session()
     retry_strategy = Retry(
         total=5,
@@ -32,11 +42,27 @@ def create_session():
     )
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("https://", adapter)
-    session.headers.update(HEADERS)
+
+    session.headers.update({
+        "accept": "*/*",
+        "content-type": "application/json",
+        "origin": "https://www.lvmh.com",
+        "referer": "https://www.lvmh.com/en/join-us/our-job-offers",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+    })
+
+    # Refresh cookies by visiting the job offers page
     session.get("https://www.lvmh.com/en/join-us/our-job-offers", timeout=30)
+
+    SESSION = session
+    SESSION_TIMESTAMP = time.time()
     return session
 
+# ================== FETCHING FUNCTIONS ==================
+# (fetch_jobs_page, extract_jobs, scrape_jobs functions remain the same as in your original script)
+
 def fetch_jobs_page(session, regions, keyword=None, page=0):
+    """Fetch a single page of jobs from the API."""
     facet_filters = [[f"geographicAreaFilter:{r}" for r in regions]]
     payload = {
         "queries": [
@@ -61,6 +87,7 @@ def fetch_jobs_page(session, regions, keyword=None, page=0):
     return resp.json()
 
 def extract_jobs(data):
+    """Extract jobs from the JSON response."""
     jobs = []
     for query_result in data.get("results", []):
         for hit in query_result.get("hits", []):
@@ -68,6 +95,7 @@ def extract_jobs(data):
     return jobs
 
 def scrape_jobs(keyword, selected_regions, progress_bar=None):
+    """Scrape all jobs for given regions and keyword, with optional progress bar."""
     session = create_session()
     all_jobs = []
     regions_to_use = selected_regions if selected_regions else REGIONS_ALL
@@ -83,10 +111,12 @@ def scrape_jobs(keyword, selected_regions, progress_bar=None):
         page += 1
         if progress_bar:
             progress_bar.progress(min(total_fetched / 2500, 1.0))
-        time.sleep(0.5)
+        time.sleep(0.5) # polite delay
     return pd.DataFrame(all_jobs)
 
-# Encoding Fix Function
+
+# ================== DATA PROCESSING FUNCTIONS ==================
+
 def fix_encoding(text):
     """Attempts to fix double-encoded UTF-8 strings like 'MahÃ©'."""
     if isinstance(text, str):
@@ -96,29 +126,25 @@ def fix_encoding(text):
             return text
     return text
 
-# Function to select and rename the desired columns and apply encoding fix
 def create_filtered_df(df):
     """
-    Combines description columns, handles encoding, creates the Slug, 
-    and maps the raw 'salary' column directly to 'Salary Range'.
+    Applies all cleaning, merging, slug creation, and column renaming logic.
     """
     if df.empty:
         return pd.DataFrame()
 
     # Apply Encoding Fix to known problematic columns
-    for col in ['city', 'description', 'name', 'profile', 'jobResponsabilities']:
+    for col in ['city', 'description', 'name', 'profile', 'jobResponsabilities', 'salary']:
         if col in df.columns:
             df[col] = df[col].apply(fix_encoding)
     
-    # --- RAW SALARY MAPPING (NEW LOGIC) ---
-    # We rename the raw 'salary' column to 'Salary Range' here.
+    # --- RAW SALARY MAPPING ---
     if 'salary' in df.columns:
         df['Salary Range'] = df['salary'] # Direct copy of the raw data
     else:
-        df['Salary Range'] = '' # Add blank if column doesn't exist
+        df['Salary Range'] = '' 
 
-
-    # --- FULL DESCRIPTION MERGE (Unchanged Logic) ---
+    # --- FULL DESCRIPTION MERGE ---
     if 'profile' in df.columns and 'jobResponsabilities' in df.columns and 'description' in df.columns:
         df['FullDescription'] = '' 
         source_cols = ['profile', 'jobResponsabilities', 'description']
@@ -135,7 +161,7 @@ def create_filtered_df(df):
 
         df['description'] = df['FullDescription'].str.strip()
     
-    # --- FORMULA/LIST ESCAPE FIX (Unchanged Logic) ---
+    # --- FORMULA/LIST ESCAPE FIX ---
     if 'description' in df.columns:
         df['description'] = np.where(
             df['description'].str.startswith(('=', '+', '-')),
@@ -143,7 +169,7 @@ def create_filtered_df(df):
             df['description']
         )
     
-    # --- SLUG CREATION (Unchanged Logic) ---
+    # --- SLUG CREATION ---
     if 'name' in df.columns and 'maison' in df.columns and 'city' in df.columns:
         cleaned_name = df['name'].astype(str).str.strip()
         cleaned_maison = df['maison'].astype(str).str.strip()
@@ -165,7 +191,7 @@ def create_filtered_df(df):
     else:
         df['Slug'] = '' 
 
-    # MAPPING for final requested titles (Crucial: 'Salary Range' is the key here)
+    # MAPPING for final requested titles
     column_map = {
         'name': 'Name',
         'maison': 'Company',
@@ -176,10 +202,10 @@ def create_filtered_df(df):
         'fullTimePartTime': 'Level',
         'link': 'Apply URL',
         'Slug': 'Slug',
-        'Salary Range': 'Salary Range' # Maps the copied raw data to the final column name
+        'Salary Range': 'Salary Range' # Includes raw salary data
     }
     
-    # 1. Filter existing columns based on the map (raw 'salary' is now excluded, only 'Salary Range' is included)
+    # 1. Filter existing columns based on the map (raw 'salary' is excluded)
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_filtered = df[existing_cols].rename(columns=column_map)
     
@@ -193,21 +219,49 @@ def create_filtered_df(df):
     for col_name in blank_columns:
         df_filtered[col_name] = '' 
     
-    # Clean up highlight tags (Unchanged Logic)
+    # Clean up highlight tags
     if 'Description' in df_filtered.columns:
         df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
     return df_filtered
-# *** CRITICAL FIX HERE ***
+
 @st.cache_data
 def convert_df_to_csv(df):
     """Converts DataFrame to CSV for download, using UTF-8-SIG for Excel compatibility."""
-    # FIX: Use 'utf-8-sig' to include the BOM, resolving CSV display errors in Excel/other programs.
+    # Using 'utf-8-sig' ensures Excel reads special characters correctly.
     return df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+
+@st.cache_data
+def create_zip_archive(df_raw, df_filtered):
+    """
+    Creates a single ZIP file containing both the full raw CSV and the filtered CSV.
+    """
+    # Create an in-memory byte stream for the ZIP file
+    zip_io = io.BytesIO()
+
+    with zipfile.ZipFile(zip_io, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+        # File 1: Full Raw Data CSV
+        # We need to make a copy of raw data just to apply the final encoding fix
+        df_raw_fixed = df_raw.copy()
+        for col in ['city', 'description', 'name']:
+            if col in df_raw_fixed.columns:
+                df_raw_fixed[col] = df_raw_fixed[col].apply(fix_encoding)
+        
+        full_csv = convert_df_to_csv(df_raw_fixed)
+        zf.writestr('lvmh_jobs_FULL_RAW.csv', full_csv)
+
+        # File 2: Filtered Data CSV
+        filtered_csv = convert_df_to_csv(df_filtered)
+        zf.writestr('lvmh_jobs_FILTERED_CLEAN.csv', filtered_csv)
+
+    # Move to the beginning of the byte stream and return
+    zip_io.seek(0)
+    return zip_io.read()
 
 
 # ================== STREAMLIT UI ==================
-st.title("LVMH Job Scraper with Dual Download")
+
+st.title("LVMH Job Scraper")
 
 # Inputs
 keyword_input = st.text_input("Job Title / Keywords (leave blank for all)")
@@ -223,41 +277,27 @@ if st.button("Fetch Jobs"):
             if not df_raw.empty:
                 st.success(f"Found {len(df_raw)} jobs!")
                 
+                # --- Prepare DataFrames ---
                 df_filtered = create_filtered_df(df_raw.copy()) 
                 
+                # Display the cleaned/filtered columns for user view
                 st.dataframe(df_filtered, use_container_width=True) 
                 
-                # --- Dual Download Buttons ---
-                st.subheader("Download Options")
-                col1, col2 = st.columns(2)
+                # --- Single-Click ZIP Download ---
+                st.subheader("Single-Click Download")
                 
-                # Download Button 1: Full Data (Original columns)
-                with col1:
-                    # Apply encoding fix to df_raw just for the download file
-                    df_raw_fixed = df_raw.copy()
-                    for col in ['city', 'description', 'name']:
-                        if col in df_raw_fixed.columns:
-                            df_raw_fixed[col] = df_raw_fixed[col].apply(fix_encoding)
-                            
-                    full_csv = convert_df_to_csv(df_raw_fixed)
-                    st.download_button(
-                        "Download Full Data (All Columns)", 
-                        data=full_csv, 
-                        file_name="lvmh_jobs_FULL.csv",
-                        mime="text/csv"
-                    )
-                
-                # Download Button 2: Filtered Columns Data (Requested columns/titles)
-                with col2:
-                    filtered_csv = convert_df_to_csv(df_filtered)
-                    st.download_button(
-                        "Download Filtered Columns (8 Columns)", 
-                        data=filtered_csv, 
-                        file_name="lvmh_jobs_FILTERED_COLUMNS.csv",
-                        mime="text/csv"
-                    )
+                # Create the ZIP file containing both CSVs
+                zip_data = create_zip_archive(df_raw, df_filtered)
+
+                st.download_button(
+                    "Download All Data (ZIP)", 
+                    data=zip_data, 
+                    file_name="lvmh_jobs_data.zip",
+                    mime="application/zip",
+                    help="Downloads a single ZIP file containing both the FULL RAW CSV and the CLEAN FILTERED CSV."
+                )
                     
             else:
                 st.warning("No jobs found.")
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"An error occurred during scraping: {e}")
