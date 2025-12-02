@@ -6,14 +6,16 @@ from urllib3.util.retry import Retry
 import time
 import io
 import zipfile
-import ast # For safely evaluating salary strings
-import numpy as np # For conditional logic (np.where)
+import ast 
+import numpy as np 
 
-# Set the page icon (favicon) and title
+# --- CRITICAL FIX: Ensure this is the first Streamlit command ---
 st.set_page_config(
-    page_title="LVMH Job Scraper",
-    page_icon="💼" # Using the briefcase emoji
+    page_title="💼 LVMH Job Scraper", # EMOJI in browser tab title
+    page_icon="💼", 
+    layout="wide"
 )
+# ---------------------------------------------------------------
 
 # ================== CONFIG ==================
 URL = "https://www.lvmh.com/api/search"
@@ -57,8 +59,8 @@ def create_session():
     SESSION_TIMESTAMP = time.time()
     return session
 
-# ================== FETCHING FUNCTIONS ==================
-# (fetch_jobs_page, extract_jobs, scrape_jobs functions remain the same as in your original script)
+# -------------------------------------------------------------------
+## 🔍 Fetching Functions
 
 def fetch_jobs_page(session, regions, keyword=None, page=0):
     """Fetch a single page of jobs from the API."""
@@ -93,6 +95,7 @@ def extract_jobs(data):
             jobs.append(hit)
     return jobs
 
+@st.cache_data(ttl=3600) # Cache the scraped data for 1 hour
 def scrape_jobs(keyword, selected_regions, progress_bar=None):
     """Scrape all jobs for given regions and keyword, with optional progress bar."""
     session = create_session()
@@ -109,12 +112,13 @@ def scrape_jobs(keyword, selected_regions, progress_bar=None):
         total_fetched += len(jobs)
         page += 1
         if progress_bar:
+            # Note: This progress bar uses a crude estimate for max total jobs (2500)
             progress_bar.progress(min(total_fetched / 2500, 1.0))
         time.sleep(0.5) # polite delay
     return pd.DataFrame(all_jobs)
 
-
-# ================== DATA PROCESSING FUNCTIONS ==================
+# -------------------------------------------------------------------
+## ✨ Data Processing Functions
 
 def fix_encoding(text):
     """Attempts to fix double-encoded UTF-8 strings like 'MahÃ©'."""
@@ -127,7 +131,8 @@ def fix_encoding(text):
 
 def create_filtered_df(df):
     """
-    Applies all cleaning, merging, slug creation, and column renaming logic.
+    Applies all cleaning, merging, slug creation, column renaming logic,
+    and sets the final column order.
     """
     if df.empty:
         return pd.DataFrame()
@@ -161,6 +166,7 @@ def create_filtered_df(df):
         df['description'] = df['FullDescription'].str.strip()
     
     # --- FORMULA/LIST ESCAPE FIX ---
+    # Prepend ' to prevent CSV/Excel from interpreting list starters (like '-') as formulas
     if 'description' in df.columns:
         df['description'] = np.where(
             df['description'].str.startswith(('=', '+', '-')),
@@ -175,6 +181,7 @@ def create_filtered_df(df):
         cleaned_city = df['city'].astype(str).str.strip()
         
         def get_first_two_words(name_str):
+            # Gets the first two words of the name, joined by a space
             words = name_str.split(' ')
             return ' '.join(words[:2])
 
@@ -201,46 +208,53 @@ def create_filtered_df(df):
         'fullTimePartTime': 'Level',
         'link': 'Apply URL',
         'Slug': 'Slug',
-        'Salary Range': 'Salary Range' # Includes raw salary data
+        'Salary Range': 'Salary Range' 
     }
     
-    # 1. Filter existing columns based on the map (raw 'salary' is excluded)
+    # 1. Select existing columns based on the map and rename
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_filtered = df[existing_cols].rename(columns=column_map)
     
-    # 2. Add the remaining BLANK columns
-    blank_columns = [
-        'Access', 'Salary', 'Deadline', 'Collection ID', 
-        'Locale ID', 'Item ID', 'Archived', 'Draft', 'Created On', 
-        'Updated On', 'Published On', 'CMS ID'
-    ]
+    # 2. Add the BLANK columns
+    blank_columns_and_defaults = {
+        'Collection ID': '', 'Locale ID': '', 'Item ID': '', 'Archived': '', 
+        'Draft': '', 'Created On': '', 'Updated On': '', 'Published On': '', 
+        'CMS ID': '', 'Access': '', 'Salary': '', 'Deadline': '',
+    }
     
-    for col_name in blank_columns:
-        df_filtered[col_name] = '' 
+    for col_name, default_value in blank_columns_and_defaults.items():
+        if col_name not in df_filtered.columns:
+             df_filtered[col_name] = default_value
     
-    # Clean up highlight tags
+    # Clean up highlight tags (keeping other HTML/BR tags)
     if 'Description' in df_filtered.columns:
         df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
-    return df_filtered
+    # --- 🎯 FINAL STEP: SET THE COLUMN ORDER ---
+    final_column_order = [
+        'Name', 'Slug', 'Collection ID', 'Locale ID', 'Item ID', 'Archived', 
+        'Draft', 'Created On', 'Updated On', 'Published On', 'CMS ID', 
+        'Company', 'Type', 'Description', 'Salary Range', 'Access', 
+        'Location', 'Industry', 'Level', 'Salary', 'Deadline', 'Apply URL'
+    ]
+    
+    # Only select columns that exist
+    ordered_cols = [col for col in final_column_order if col in df_filtered.columns]
+    
+    return df_filtered[ordered_cols]
 
 @st.cache_data
 def convert_df_to_csv(df):
     """Converts DataFrame to CSV for download, using UTF-8-SIG for Excel compatibility."""
-    # Using 'utf-8-sig' ensures Excel reads special characters correctly.
     return df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
 @st.cache_data
 def create_zip_archive(df_raw, df_filtered):
-    """
-    Creates a single ZIP file containing both the full raw CSV and the filtered CSV.
-    """
-    # Create an in-memory byte stream for the ZIP file
+    """Creates a single ZIP file containing both the full raw CSV and the filtered CSV."""
     zip_io = io.BytesIO()
 
     with zipfile.ZipFile(zip_io, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
-        # File 1: Full Raw Data CSV
-        # We need to make a copy of raw data just to apply the final encoding fix
+        # File 1: Full Raw Data CSV (Apply encoding fix to the raw data)
         df_raw_fixed = df_raw.copy()
         for col in ['city', 'description', 'name']:
             if col in df_raw_fixed.columns:
@@ -253,14 +267,13 @@ def create_zip_archive(df_raw, df_filtered):
         filtered_csv = convert_df_to_csv(df_filtered)
         zf.writestr('lvmh_jobs_FILTERED_CLEAN.csv', filtered_csv)
 
-    # Move to the beginning of the byte stream and return
     zip_io.seek(0)
     return zip_io.read()
 
+# -------------------------------------------------------------------
+## 💻 Streamlit UI
 
-# ================== STREAMLIT UI ==================
-
-st.title("💼 LVMH Job Scraper")
+st.title("💼 LVMH Job Scraper") # EMOJI in the main app title
 
 # Inputs
 keyword_input = st.text_input("Job Title / Keywords (leave blank for all)")
@@ -270,22 +283,21 @@ if st.button("Fetch Jobs"):
     progress_bar = st.progress(0)
     with st.spinner("Scraping jobs... this may take a few minutes..."):
         try:
+            # Scraping
             df_raw = scrape_jobs(keyword_input.strip() if keyword_input else None, regions_input, progress_bar)
             progress_bar.empty()
             
             if not df_raw.empty:
                 st.success(f"Found {len(df_raw)} jobs!")
                 
-                # --- Prepare DataFrames ---
+                # Processing
                 df_filtered = create_filtered_df(df_raw.copy()) 
                 
-                # Display the cleaned/filtered columns for user view
+                # Display 
                 st.dataframe(df_filtered, use_container_width=True) 
                 
-                # --- Single-Click ZIP Download ---
+                # Download
                 st.subheader("Single-Click Download")
-                
-                # Create the ZIP file containing both CSVs
                 zip_data = create_zip_archive(df_raw, df_filtered)
 
                 st.download_button(
@@ -297,13 +309,6 @@ if st.button("Fetch Jobs"):
                 )
                     
             else:
-                st.warning("No jobs found.")
+                st.warning("No jobs found. Try different search criteria.")
         except Exception as e:
             st.error(f"An error occurred during scraping: {e}")
-
-
-
-
-
-
-
