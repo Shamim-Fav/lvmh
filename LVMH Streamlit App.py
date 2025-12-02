@@ -13,7 +13,6 @@ import numpy as np # For conditional logic (np.where)
 st.set_page_config(
     page_title="LVMH Job Scraper", 
     page_icon="💼", 
-    layout="wide"
 )
 
 # ================== CONFIG ==================
@@ -301,3 +300,4 @@ if st.button("Fetch Jobs"):
                 st.warning("No jobs found.")
         except Exception as e:
             st.error(f"An error occurred during scraping: {e}")
+
