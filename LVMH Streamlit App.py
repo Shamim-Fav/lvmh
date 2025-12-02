@@ -99,35 +99,50 @@ def fix_encoding(text):
 # Function to select and rename the desired columns and apply encoding fix
 def create_filtered_df(df):
     """
-    Selects the desired columns, renames them, applies encoding correction, adds blank columns, 
-    creates the Slug, and prioritizes 'profile' data for the Description column.
+    Combines description columns, handles encoding, creates the Slug, and applies fixes
+    to preserve HTML and prevent formula issues in CSV/Excel.
     """
     if df.empty:
         return pd.DataFrame()
 
-    # Apply Encoding Fix to known problematic columns (must happen BEFORE description and slug logic)
-    for col in ['city', 'description', 'name', 'profile']:
+    # Apply Encoding Fix to known problematic columns
+    for col in ['city', 'description', 'name', 'profile', 'jobResponsabilities']:
         if col in df.columns:
             df[col] = df[col].apply(fix_encoding)
             
-    # --- DESCRIPTION PRIORITY FIX ---
-    # Goal: Use 'profile' content if available, otherwise use original 'description'.
-    if 'profile' in df.columns and 'description' in df.columns:
-        # 1. Ensure 'profile' and 'description' are treated as strings
-        df['profile'] = df['profile'].astype(str)
-        df['description'] = df['description'].astype(str)
-        
-        # 2. Use np.where to conditionally replace the 'description' column content
-        # Check if 'profile' is NOT an empty string after cleaning whitespace
-        import numpy as np
-        
-        # NOTE: np.where is an efficient way to apply if/else logic across a DataFrame Series.
-        df['description'] = np.where(
-            df['profile'].str.strip() != '', # Condition: Is 'profile' not blank?
-            df['profile'],                   # If True: Use 'profile' content
-            df['description']                # If False: Keep original 'description' content
-        )
+    # --- FULL DESCRIPTION MERGE ---
+    
+    # 1. Initialize a new column to hold the combined description
+    df['FullDescription'] = '' 
+    
+    # 2. Iterate and append content if the source column exists and is not blank
+    source_cols = ['profile', 'jobResponsabilities', 'description']
+    
+    for col in source_cols:
+        if col in df.columns:
+            # Ensure the column is a string type and clean whitespace
+            df[col] = df[col].astype(str).str.strip()
+            
+            # Conditionally append the column's content to FullDescription if it's not empty
+            df['FullDescription'] = np.where(
+                (df[col] != ''), # Condition: If the source column is NOT blank
+                df['FullDescription'] + "\n\n--- " + col.upper() + " ---\n" + df[col], # If True: Append with a separator
+                df['FullDescription'] # If False: Keep current content
+            )
 
+    # Move the combined description back to the original 'description' column name
+    df['description'] = df['FullDescription'].str.strip()
+    
+    # --- FORMULA/LIST ESCAPE FIX (CRITICAL) ---
+    # Prepend ' to the Description column if it starts with a potentially problematic character
+    # This prevents CSV/Excel from interpreting content like "- Curious" as a formula.
+    if 'description' in df.columns:
+        df['description'] = np.where(
+            df['description'].str.startswith(('=', '+', '-')), # Check for formula starters
+            "'" + df['description'],                            # Prepend single quote
+            df['description']                                   # Keep as is
+        )
+    
     # --- SLUG CREATION (Unchanged Logic) ---
     if 'name' in df.columns and 'maison' in df.columns and 'city' in df.columns:
         
@@ -161,7 +176,7 @@ def create_filtered_df(df):
         'name': 'Name',
         'maison': 'Company',
         'contract': 'Type',
-        'description': 'Description', # This column now holds the prioritized description!
+        'description': 'Description', # This column now holds the merged and escaped data!
         'city': 'Location',
         'functionFilter': 'Industry',
         'fullTimePartTime': 'Level',
@@ -185,7 +200,7 @@ def create_filtered_df(df):
     
     # Clean up highlight tags from the final Description column
     if 'Description' in df_filtered.columns:
-        # Note: The description column now holds either the original or the 'profile' data.
+        # NOTE: WE ARE NO LONGER REMOVING HTML TAGS LIKE <BR> HERE
         df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
     return df_filtered
