@@ -20,6 +20,7 @@ REGIONS_ALL = ["America", "Asia Pacific", "Europe", "Middle East / Africa"]
 HITS_PER_PAGE = 50
 
 # ================== FUNCTIONS ==================
+
 def create_session():
     session = requests.Session()
     retry_strategy = Retry(
@@ -43,7 +44,7 @@ def fetch_jobs_page(session, regions, keyword=None, page=0):
             {
                 "indexName": "PRD-en-us-timestamp-desc",
                 "params": {
-                    "facetFilters": facet_filters,  # Use the correctly formatted list of lists
+                    "facetFilters": facet_filters,
                     "facets": ["businessGroupFilter", "cityFilter", "contractFilter", "countryRegionFilter"],
                     "filters": "category:job",
                     "highlightPostTag": "__/ais-highlight__",
@@ -86,11 +87,27 @@ def scrape_jobs(keyword, selected_regions, progress_bar=None):
         time.sleep(0.5)
     return pd.DataFrame(all_jobs)
 
-# NEW: Function to select and rename the desired columns
+# NEW: Encoding Fix Function
+def fix_encoding(text):
+    """Attempts to fix double-encoded UTF-8 strings like 'MahÃ©'."""
+    if isinstance(text, str):
+        try:
+            # Common fix: decode from the misinterpreted encoding (often Latin-1) back to the correct UTF-8 string
+            return text.encode('latin-1').decode('utf-8')
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            return text
+    return text
+
+# NEW: Function to select and rename the desired columns and apply encoding fix
 def create_filtered_df(df):
-    """Selects the desired columns and renames them."""
+    """Selects the desired columns, renames them, and applies encoding correction."""
     if df.empty:
         return pd.DataFrame()
+
+    # Apply Encoding Fix to known problematic columns before renaming
+    for col in ['city', 'description', 'name']:
+        if col in df.columns:
+            df[col] = df[col].apply(fix_encoding)
 
     # MAPPING for final requested titles
     column_map = {
@@ -108,16 +125,17 @@ def create_filtered_df(df):
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_filtered = df[existing_cols].rename(columns=column_map)
     
-    # Clean up description text from highlight tags
-    df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
+    # Clean up highlight tags from description (using the already fixed description column)
+    if 'Description' in df_filtered.columns:
+        df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
     return df_filtered
 
 @st.cache_data
 def convert_df_to_csv(df):
-    """Converts DataFrame to CSV for download."""
-    # Use to_csv instead of to_excel, as requested previously
-    return df.to_csv(index=False).encode('utf-8')
+    """Converts DataFrame to CSV for download, explicitly using UTF-8."""
+    # Crucial for preserving characters like 'é' in the downloaded file
+    return df.to_csv(index=False, encoding='utf-8').encode('utf-8')
 
 # ================== STREAMLIT UI ==================
 st.title("LVMH Job Scraper with Dual Download")
@@ -137,9 +155,11 @@ if st.button("Fetch Jobs"):
                 st.success(f"Found {len(df_raw)} jobs!")
                 
                 # --- Prepare DataFrames ---
-                df_filtered = create_filtered_df(df_raw)
+                # df_filtered contains the fixed/renamed columns
+                df_filtered = create_filtered_df(df_raw.copy()) 
                 
-                st.dataframe(df_filtered) # Display the cleaned/filtered columns
+                # Display the cleaned/filtered columns for user view
+                st.dataframe(df_filtered, use_container_width=True) 
                 
                 # --- Dual Download Buttons ---
                 st.subheader("Download Options")
@@ -147,7 +167,14 @@ if st.button("Fetch Jobs"):
                 
                 # Download Button 1: Full Data (Original columns)
                 with col1:
-                    full_csv = convert_df_to_csv(df_raw)
+                    # NOTE: We use df_raw for the full file, but it must still be passed through the
+                    # encoding fix for the downloaded file to be correct.
+                    df_raw_fixed = df_raw.copy()
+                    for col in ['city', 'description', 'name']:
+                        if col in df_raw_fixed.columns:
+                            df_raw_fixed[col] = df_raw_fixed[col].apply(fix_encoding)
+                            
+                    full_csv = convert_df_to_csv(df_raw_fixed)
                     st.download_button(
                         "Download Full Data (All Columns)", 
                         data=full_csv, 
