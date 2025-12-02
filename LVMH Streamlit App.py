@@ -100,7 +100,7 @@ def fix_encoding(text):
 def create_filtered_df(df):
     """
     Combines description columns, handles encoding, creates the Slug, 
-    parses the 'salary' column, and adds blank columns.
+    parses the 'salary' column (handling string representations), and adds blank columns.
     """
     if df.empty:
         return pd.DataFrame()
@@ -110,10 +110,21 @@ def create_filtered_df(df):
         if col in df.columns:
             df[col] = df[col].apply(fix_encoding)
     
-    # --- SALARY RANGE PARSING (NEW LOGIC) ---
+    # --- SALARY RANGE PARSING (FIXED LOGIC) ---
     if 'salary' in df.columns:
         def format_salary_range(salary_data):
-            # Ensure the input is treated as a dictionary, handling None/NaN values
+            # 1. Safely convert string representation of dict to actual dict
+            if isinstance(salary_data, str):
+                try:
+                    # Use ast.literal_eval to safely convert the string to a dictionary
+                    salary_data = ast.literal_eval(salary_data)
+                except (ValueError, SyntaxError):
+                    # If conversion fails (e.g., if it's an empty cell or invalid string), treat as empty
+                    salary_data = {}
+            elif salary_data is None:
+                salary_data = {}
+            
+            # Ensure the input is now treated as a dictionary
             if not isinstance(salary_data, dict):
                 return ''
             
@@ -123,21 +134,23 @@ def create_filtered_df(df):
             period = salary_data.get('period')
             
             # --- Format Min/Max ---
-            # Handle the 'To be negotiated' string case first
             if min_val == 'To be negotiated':
                 return 'To be negotiated'
             
-            # Clean up numerical values (convert to int/float if necessary, though Python handles mixing)
-            try:
-                min_str = f"{min_val:,}" if min_val is not None else None
-            except (ValueError, TypeError):
-                min_str = str(min_val) if min_val is not None else None
-                
-            try:
-                max_str = f"{max_val:,}" if max_val is not None else None
-            except (ValueError, TypeError):
-                max_str = str(max_val) if max_val is not None else None
-            
+            # Function to format numbers with commas, handling None or non-numeric types
+            def safe_format(val):
+                if val is None:
+                    return None
+                try:
+                    # Attempt to convert to float/int and format with commas
+                    return f"{float(val):,.0f}".replace('.0', '')
+                except (ValueError, TypeError):
+                    # If it's a string like "Confidential", return as is
+                    return str(val)
+
+            min_str = safe_format(min_val)
+            max_str = safe_format(max_val)
+
             # Construct the Range String
             if min_str and max_str:
                 range_str = f"{min_str} - {max_str}"
@@ -146,7 +159,7 @@ def create_filtered_df(df):
             elif max_str:
                 range_str = f"Max {max_str}"
             else:
-                return '' # No minimum or maximum salary found
+                return ''
                 
             # --- Combine with Currency and Period ---
             parts = [
@@ -155,13 +168,11 @@ def create_filtered_df(df):
                 f"({period})" if period else None
             ]
             
-            # Join parts that exist
             return ' '.join(p for p in parts if p)
         
-        # Apply the formatting function to the 'salary' column to create the 'Salary Range' column
+        # Apply the formatting function to the 'salary' column
         df['Salary Range'] = df['salary'].apply(format_salary_range)
     else:
-        # Create a blank column if the raw 'salary' column is missing
         df['Salary Range'] = ''
 
 
@@ -212,7 +223,7 @@ def create_filtered_df(df):
     else:
         df['Slug'] = '' 
 
-    # MAPPING for final requested titles
+    # MAPPING for final requested titles (Unchanged)
     column_map = {
         'name': 'Name',
         'maison': 'Company',
@@ -223,7 +234,6 @@ def create_filtered_df(df):
         'fullTimePartTime': 'Level',
         'link': 'Apply URL',
         'Slug': 'Slug',
-        # --- MAPPED SALARY COLUMN ---
         'Salary Range': 'Salary Range' 
     }
     
@@ -231,8 +241,7 @@ def create_filtered_df(df):
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_filtered = df[existing_cols].rename(columns=column_map)
     
-    # 2. Add the remaining BLANK columns
-    # We remove 'Salary Range' from this list since it's now dynamically created
+    # 2. Add the remaining BLANK columns (Unchanged)
     blank_columns = [
         'Access', 'Salary', 'Deadline', 'Collection ID', 
         'Locale ID', 'Item ID', 'Archived', 'Draft', 'Created On', 
@@ -242,7 +251,7 @@ def create_filtered_df(df):
     for col_name in blank_columns:
         df_filtered[col_name] = '' 
     
-    # Clean up highlight tags
+    # Clean up highlight tags (Unchanged)
     if 'Description' in df_filtered.columns:
         df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
