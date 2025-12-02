@@ -6,7 +6,6 @@ from urllib3.util.retry import Retry
 import time
 import io
 import numpy as np # <-- ADD THIS LINE
-import ast
 
 # ================== CONFIG ==================
 URL = "https://www.lvmh.com/api/search"
@@ -101,7 +100,7 @@ def fix_encoding(text):
 def create_filtered_df(df):
     """
     Combines description columns, handles encoding, creates the Slug, 
-    parses the 'salary' column (handling string representations), and adds blank columns.
+    parses the 'salary' column, and correctly places it into 'Salary Range'.
     """
     if df.empty:
         return pd.DataFrame()
@@ -111,21 +110,17 @@ def create_filtered_df(df):
         if col in df.columns:
             df[col] = df[col].apply(fix_encoding)
     
-    # --- SALARY RANGE PARSING (FIXED LOGIC) ---
+    # --- SALARY RANGE PARSING (Unchanged Logic) ---
     if 'salary' in df.columns:
         def format_salary_range(salary_data):
-            # 1. Safely convert string representation of dict to actual dict
             if isinstance(salary_data, str):
                 try:
-                    # Use ast.literal_eval to safely convert the string to a dictionary
                     salary_data = ast.literal_eval(salary_data)
                 except (ValueError, SyntaxError):
-                    # If conversion fails (e.g., if it's an empty cell or invalid string), treat as empty
                     salary_data = {}
             elif salary_data is None:
                 salary_data = {}
             
-            # Ensure the input is now treated as a dictionary
             if not isinstance(salary_data, dict):
                 return ''
             
@@ -134,25 +129,20 @@ def create_filtered_df(df):
             currency = salary_data.get('currency')
             period = salary_data.get('period')
             
-            # --- Format Min/Max ---
             if min_val == 'To be negotiated':
                 return 'To be negotiated'
             
-            # Function to format numbers with commas, handling None or non-numeric types
             def safe_format(val):
                 if val is None:
                     return None
                 try:
-                    # Attempt to convert to float/int and format with commas
                     return f"{float(val):,.0f}".replace('.0', '')
                 except (ValueError, TypeError):
-                    # If it's a string like "Confidential", return as is
                     return str(val)
 
             min_str = safe_format(min_val)
             max_str = safe_format(max_val)
 
-            # Construct the Range String
             if min_str and max_str:
                 range_str = f"{min_str} - {max_str}"
             elif min_str:
@@ -162,7 +152,6 @@ def create_filtered_df(df):
             else:
                 return ''
                 
-            # --- Combine with Currency and Period ---
             parts = [
                 currency if currency else None,
                 range_str,
@@ -171,13 +160,13 @@ def create_filtered_df(df):
             
             return ' '.join(p for p in parts if p)
         
-        # Apply the formatting function to the 'salary' column
+        # NOTE: We create a new column named 'Salary Range' on the DataFrame
         df['Salary Range'] = df['salary'].apply(format_salary_range)
     else:
         df['Salary Range'] = ''
 
 
-    # --- FULL DESCRIPTION MERGE (Unchanged) ---
+    # --- FULL DESCRIPTION MERGE (Unchanged Logic) ---
     if 'profile' in df.columns and 'jobResponsabilities' in df.columns and 'description' in df.columns:
         df['FullDescription'] = '' 
         source_cols = ['profile', 'jobResponsabilities', 'description']
@@ -194,7 +183,7 @@ def create_filtered_df(df):
 
         df['description'] = df['FullDescription'].str.strip()
     
-    # --- FORMULA/LIST ESCAPE FIX (Unchanged) ---
+    # --- FORMULA/LIST ESCAPE FIX (Unchanged Logic) ---
     if 'description' in df.columns:
         df['description'] = np.where(
             df['description'].str.startswith(('=', '+', '-')),
@@ -202,7 +191,7 @@ def create_filtered_df(df):
             df['description']
         )
     
-    # --- SLUG CREATION (Unchanged) ---
+    # --- SLUG CREATION (Unchanged Logic) ---
     if 'name' in df.columns and 'maison' in df.columns and 'city' in df.columns:
         cleaned_name = df['name'].astype(str).str.strip()
         cleaned_maison = df['maison'].astype(str).str.strip()
@@ -224,7 +213,7 @@ def create_filtered_df(df):
     else:
         df['Slug'] = '' 
 
-    # MAPPING for final requested titles (Unchanged)
+    # --- MAPPING FOR FINAL COLUMNS (Crucial change here) ---
     column_map = {
         'name': 'Name',
         'maison': 'Company',
@@ -235,16 +224,17 @@ def create_filtered_df(df):
         'fullTimePartTime': 'Level',
         'link': 'Apply URL',
         'Slug': 'Slug',
-        'Salary Range': 'Salary Range' 
+        'Salary Range': 'Salary Range' # Includes only the clean, formatted data
     }
     
-    # 1. Filter existing columns and rename
+    # 1. Filter existing columns based on the map (raw 'salary' is excluded)
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_filtered = df[existing_cols].rename(columns=column_map)
     
-    # 2. Add the remaining BLANK columns (Unchanged)
+    # 2. Add the remaining BLANK columns
+    # NOTE: 'Salary' (the original blank placeholder) is REMOVED from this list
     blank_columns = [
-        'Access', 'Salary', 'Deadline', 'Collection ID', 
+        'Access', 'Deadline', 'Collection ID', 
         'Locale ID', 'Item ID', 'Archived', 'Draft', 'Created On', 
         'Updated On', 'Published On', 'CMS ID'
     ]
@@ -252,7 +242,7 @@ def create_filtered_df(df):
     for col_name in blank_columns:
         df_filtered[col_name] = '' 
     
-    # Clean up highlight tags (Unchanged)
+    # Clean up highlight tags (Unchanged Logic)
     if 'Description' in df_filtered.columns:
         df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
@@ -321,4 +311,3 @@ if st.button("Fetch Jobs"):
                 st.warning("No jobs found.")
         except Exception as e:
             st.error(f"Error: {e}")
-
