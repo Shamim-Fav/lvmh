@@ -6,6 +6,7 @@ from urllib3.util.retry import Retry
 import time
 import io
 import numpy as np # <-- ADD THIS LINE
+import ast
 
 # ================== CONFIG ==================
 URL = "https://www.lvmh.com/api/search"
@@ -320,3 +321,4 @@ if st.button("Fetch Jobs"):
                 st.warning("No jobs found.")
         except Exception as e:
             st.error(f"Error: {e}")
+
