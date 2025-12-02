@@ -11,8 +11,9 @@ import numpy as np
 
 # --- CRITICAL FIX: Ensure this is the first Streamlit command ---
 st.set_page_config(
-    page_title="💼 LVMH Job Scraper", # EMOJI in browser tab title
-    page_icon="💼"
+    page_title="💼 LVMH Job Scraper", 
+    page_icon="💼", 
+    layout="wide"
 )
 # ---------------------------------------------------------------
 
@@ -95,7 +96,7 @@ def extract_jobs(data):
     return jobs
 
 @st.cache_data(ttl=3600) # Cache the scraped data for 1 hour
-def scrape_jobs(keyword, selected_regions, progress_bar=None):
+def scrape_jobs(keyword, selected_regions, _progress_bar=None): # ⬅️ FIX APPLIED HERE
     """Scrape all jobs for given regions and keyword, with optional progress bar."""
     session = create_session()
     all_jobs = []
@@ -110,9 +111,9 @@ def scrape_jobs(keyword, selected_regions, progress_bar=None):
         all_jobs.extend(jobs)
         total_fetched += len(jobs)
         page += 1
-        if progress_bar:
+        if _progress_bar: # ⬅️ CALL SITE UPDATED HERE
             # Note: This progress bar uses a crude estimate for max total jobs (2500)
-            progress_bar.progress(min(total_fetched / 2500, 1.0))
+            _progress_bar.progress(min(total_fetched / 2500, 1.0))
         time.sleep(0.5) # polite delay
     return pd.DataFrame(all_jobs)
 
@@ -282,8 +283,8 @@ if st.button("Fetch Jobs"):
     progress_bar = st.progress(0)
     with st.spinner("Scraping jobs... this may take a few minutes..."):
         try:
-            # Scraping
-            df_raw = scrape_jobs(keyword_input.strip() if keyword_input else None, regions_input, progress_bar)
+            # Scraping (Passing the progress_bar with underscore)
+            df_raw = scrape_jobs(keyword_input.strip() if keyword_input else None, regions_input, _progress_bar=progress_bar) # ⬅️ CALL SITE UPDATED HERE
             progress_bar.empty()
             
             if not df_raw.empty:
@@ -311,4 +312,3 @@ if st.button("Fetch Jobs"):
                 st.warning("No jobs found. Try different search criteria.")
         except Exception as e:
             st.error(f"An error occurred during scraping: {e}")
-
