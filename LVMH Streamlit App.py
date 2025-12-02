@@ -100,7 +100,7 @@ def fix_encoding(text):
 def create_filtered_df(df):
     """
     Combines description columns, handles encoding, creates the Slug, 
-    parses the 'salary' column, and correctly places it into 'Salary Range'.
+    and maps the raw 'salary' column directly to 'Salary Range'.
     """
     if df.empty:
         return pd.DataFrame()
@@ -110,60 +110,12 @@ def create_filtered_df(df):
         if col in df.columns:
             df[col] = df[col].apply(fix_encoding)
     
-    # --- SALARY RANGE PARSING (Unchanged Logic) ---
+    # --- RAW SALARY MAPPING (NEW LOGIC) ---
+    # We rename the raw 'salary' column to 'Salary Range' here.
     if 'salary' in df.columns:
-        def format_salary_range(salary_data):
-            if isinstance(salary_data, str):
-                try:
-                    salary_data = ast.literal_eval(salary_data)
-                except (ValueError, SyntaxError):
-                    salary_data = {}
-            elif salary_data is None:
-                salary_data = {}
-            
-            if not isinstance(salary_data, dict):
-                return ''
-            
-            min_val = salary_data.get('min')
-            max_val = salary_data.get('max')
-            currency = salary_data.get('currency')
-            period = salary_data.get('period')
-            
-            if min_val == 'To be negotiated':
-                return 'To be negotiated'
-            
-            def safe_format(val):
-                if val is None:
-                    return None
-                try:
-                    return f"{float(val):,.0f}".replace('.0', '')
-                except (ValueError, TypeError):
-                    return str(val)
-
-            min_str = safe_format(min_val)
-            max_str = safe_format(max_val)
-
-            if min_str and max_str:
-                range_str = f"{min_str} - {max_str}"
-            elif min_str:
-                range_str = f"Min {min_str}"
-            elif max_str:
-                range_str = f"Max {max_str}"
-            else:
-                return ''
-                
-            parts = [
-                currency if currency else None,
-                range_str,
-                f"({period})" if period else None
-            ]
-            
-            return ' '.join(p for p in parts if p)
-        
-        # NOTE: We create a new column named 'Salary Range' on the DataFrame
-        df['Salary Range'] = df['salary'].apply(format_salary_range)
+        df['Salary Range'] = df['salary'] # Direct copy of the raw data
     else:
-        df['Salary Range'] = ''
+        df['Salary Range'] = '' # Add blank if column doesn't exist
 
 
     # --- FULL DESCRIPTION MERGE (Unchanged Logic) ---
@@ -213,7 +165,7 @@ def create_filtered_df(df):
     else:
         df['Slug'] = '' 
 
-    # --- MAPPING FOR FINAL COLUMNS (Crucial change here) ---
+    # MAPPING for final requested titles (Crucial: 'Salary Range' is the key here)
     column_map = {
         'name': 'Name',
         'maison': 'Company',
@@ -224,17 +176,16 @@ def create_filtered_df(df):
         'fullTimePartTime': 'Level',
         'link': 'Apply URL',
         'Slug': 'Slug',
-        'Salary Range': 'Salary Range' # Includes only the clean, formatted data
+        'Salary Range': 'Salary Range' # Maps the copied raw data to the final column name
     }
     
-    # 1. Filter existing columns based on the map (raw 'salary' is excluded)
+    # 1. Filter existing columns based on the map (raw 'salary' is now excluded, only 'Salary Range' is included)
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_filtered = df[existing_cols].rename(columns=column_map)
     
     # 2. Add the remaining BLANK columns
-    # NOTE: 'Salary' (the original blank placeholder) is REMOVED from this list
     blank_columns = [
-        'Access', 'Deadline', 'Collection ID', 
+        'Access', 'Salary', 'Deadline', 'Collection ID', 
         'Locale ID', 'Item ID', 'Archived', 'Draft', 'Created On', 
         'Updated On', 'Published On', 'CMS ID'
     ]
@@ -247,7 +198,6 @@ def create_filtered_df(df):
         df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
     return df_filtered
-
 # *** CRITICAL FIX HERE ***
 @st.cache_data
 def convert_df_to_csv(df):
