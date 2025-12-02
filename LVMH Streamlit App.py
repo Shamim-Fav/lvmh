@@ -99,8 +99,8 @@ def fix_encoding(text):
 # Function to select and rename the desired columns and apply encoding fix
 def create_filtered_df(df):
     """
-    Combines description columns, handles encoding, creates the Slug, and applies fixes
-    to preserve HTML and prevent formula issues in CSV/Excel.
+    Combines description columns, handles encoding, creates the Slug, 
+    parses the 'salary' column, and adds blank columns.
     """
     if df.empty:
         return pd.DataFrame()
@@ -109,65 +109,106 @@ def create_filtered_df(df):
     for col in ['city', 'description', 'name', 'profile', 'jobResponsabilities']:
         if col in df.columns:
             df[col] = df[col].apply(fix_encoding)
+    
+    # --- SALARY RANGE PARSING (NEW LOGIC) ---
+    if 'salary' in df.columns:
+        def format_salary_range(salary_data):
+            # Ensure the input is treated as a dictionary, handling None/NaN values
+            if not isinstance(salary_data, dict):
+                return ''
             
-    # --- FULL DESCRIPTION MERGE ---
-    
-    # 1. Initialize a new column to hold the combined description
-    df['FullDescription'] = '' 
-    
-    # 2. Iterate and append content if the source column exists and is not blank
-    source_cols = ['profile', 'jobResponsabilities', 'description']
-    
-    for col in source_cols:
-        if col in df.columns:
-            # Ensure the column is a string type and clean whitespace
-            df[col] = df[col].astype(str).str.strip()
+            min_val = salary_data.get('min')
+            max_val = salary_data.get('max')
+            currency = salary_data.get('currency')
+            period = salary_data.get('period')
             
-            # Conditionally append the column's content to FullDescription if it's not empty
-            df['FullDescription'] = np.where(
-                (df[col] != ''), # Condition: If the source column is NOT blank
-                df['FullDescription'] + "\n\n--- " + col.upper() + " ---\n" + df[col], # If True: Append with a separator
-                df['FullDescription'] # If False: Keep current content
-            )
+            # --- Format Min/Max ---
+            # Handle the 'To be negotiated' string case first
+            if min_val == 'To be negotiated':
+                return 'To be negotiated'
+            
+            # Clean up numerical values (convert to int/float if necessary, though Python handles mixing)
+            try:
+                min_str = f"{min_val:,}" if min_val is not None else None
+            except (ValueError, TypeError):
+                min_str = str(min_val) if min_val is not None else None
+                
+            try:
+                max_str = f"{max_val:,}" if max_val is not None else None
+            except (ValueError, TypeError):
+                max_str = str(max_val) if max_val is not None else None
+            
+            # Construct the Range String
+            if min_str and max_str:
+                range_str = f"{min_str} - {max_str}"
+            elif min_str:
+                range_str = f"Min {min_str}"
+            elif max_str:
+                range_str = f"Max {max_str}"
+            else:
+                return '' # No minimum or maximum salary found
+                
+            # --- Combine with Currency and Period ---
+            parts = [
+                currency if currency else None,
+                range_str,
+                f"({period})" if period else None
+            ]
+            
+            # Join parts that exist
+            return ' '.join(p for p in parts if p)
+        
+        # Apply the formatting function to the 'salary' column to create the 'Salary Range' column
+        df['Salary Range'] = df['salary'].apply(format_salary_range)
+    else:
+        # Create a blank column if the raw 'salary' column is missing
+        df['Salary Range'] = ''
 
-    # Move the combined description back to the original 'description' column name
-    df['description'] = df['FullDescription'].str.strip()
+
+    # --- FULL DESCRIPTION MERGE (Unchanged) ---
+    if 'profile' in df.columns and 'jobResponsabilities' in df.columns and 'description' in df.columns:
+        df['FullDescription'] = '' 
+        source_cols = ['profile', 'jobResponsabilities', 'description']
+        
+        for col in source_cols:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.strip()
+                
+                df['FullDescription'] = np.where(
+                    (df[col] != ''),
+                    df['FullDescription'] + "\n\n--- " + col.upper() + " ---\n" + df[col],
+                    df['FullDescription']
+                )
+
+        df['description'] = df['FullDescription'].str.strip()
     
-    # --- FORMULA/LIST ESCAPE FIX (CRITICAL) ---
-    # Prepend ' to the Description column if it starts with a potentially problematic character
-    # This prevents CSV/Excel from interpreting content like "- Curious" as a formula.
+    # --- FORMULA/LIST ESCAPE FIX (Unchanged) ---
     if 'description' in df.columns:
         df['description'] = np.where(
-            df['description'].str.startswith(('=', '+', '-')), # Check for formula starters
-            "'" + df['description'],                            # Prepend single quote
-            df['description']                                   # Keep as is
+            df['description'].str.startswith(('=', '+', '-')),
+            "'" + df['description'],
+            df['description']
         )
     
-    # --- SLUG CREATION (Unchanged Logic) ---
+    # --- SLUG CREATION (Unchanged) ---
     if 'name' in df.columns and 'maison' in df.columns and 'city' in df.columns:
-        
-        # 1. Clean and Prepare Components
         cleaned_name = df['name'].astype(str).str.strip()
         cleaned_maison = df['maison'].astype(str).str.strip()
         cleaned_city = df['city'].astype(str).str.strip()
         
-        # 2. Get the First TWO words of the 'name' column
         def get_first_two_words(name_str):
             words = name_str.split(' ')
             return ' '.join(words[:2])
 
         first_two_name_parts = cleaned_name.apply(get_first_two_words)
         
-        # 3. Combine the parts
         df['Slug'] = (first_two_name_parts.str.lower() + '-' + 
                       cleaned_maison.str.lower() + '-' + 
                       cleaned_city.str.lower())
         
-        # 4. Clean the slug
         df['Slug'] = df['Slug'].str.replace(r'[^a-z0-9\-]+', '-', regex=True)
         df['Slug'] = df['Slug'].str.replace(r'[\-]+', '-', regex=True)
         df['Slug'] = df['Slug'].str.strip('-')
-        
     else:
         df['Slug'] = '' 
 
@@ -176,21 +217,24 @@ def create_filtered_df(df):
         'name': 'Name',
         'maison': 'Company',
         'contract': 'Type',
-        'description': 'Description', # This column now holds the merged and escaped data!
+        'description': 'Description',
         'city': 'Location',
         'functionFilter': 'Industry',
         'fullTimePartTime': 'Level',
         'link': 'Apply URL',
-        'Slug': 'Slug'
+        'Slug': 'Slug',
+        # --- MAPPED SALARY COLUMN ---
+        'Salary Range': 'Salary Range' 
     }
     
     # 1. Filter existing columns and rename
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_filtered = df[existing_cols].rename(columns=column_map)
     
-    # 2. Add the BLANK columns
+    # 2. Add the remaining BLANK columns
+    # We remove 'Salary Range' from this list since it's now dynamically created
     blank_columns = [
-        'Salary Range', 'Access', 'Salary', 'Deadline', 'Collection ID', 
+        'Access', 'Salary', 'Deadline', 'Collection ID', 
         'Locale ID', 'Item ID', 'Archived', 'Draft', 'Created On', 
         'Updated On', 'Published On', 'CMS ID'
     ]
@@ -198,9 +242,8 @@ def create_filtered_df(df):
     for col_name in blank_columns:
         df_filtered[col_name] = '' 
     
-    # Clean up highlight tags from the final Description column
+    # Clean up highlight tags
     if 'Description' in df_filtered.columns:
-        # NOTE: WE ARE NO LONGER REMOVING HTML TAGS LIKE <BR> HERE
         df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
     return df_filtered
