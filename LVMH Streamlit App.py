@@ -12,8 +12,7 @@ import numpy as np
 # --- CRITICAL FIX: Ensure this is the first Streamlit command ---
 st.set_page_config(
     page_title="💼 LVMH Job Scraper", 
-    page_icon="💼", 
-    layout="wide"
+    page_icon="💼"
 )
 # ---------------------------------------------------------------
 
@@ -312,3 +311,4 @@ if st.button("Fetch Jobs"):
                 st.warning("No jobs found. Try different search criteria.")
         except Exception as e:
             st.error(f"An error occurred during scraping: {e}")
+
