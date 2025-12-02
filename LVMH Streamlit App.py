@@ -4,6 +4,7 @@ import pandas as pd
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
+import io
 
 # ================== CONFIG ==================
 URL = "https://www.lvmh.com/api/search"
@@ -19,13 +20,15 @@ if 'raw_df' not in st.session_state:
 SESSION = None
 SESSION_TIMESTAMP = None
 
+# ================== CACHED SETUP AND SCRAPING FUNCTIONS ==================
+
 @st.cache_data(show_spinner=False, ttl=3600)
 def create_session():
     """Create or refresh the requests session with automatic cookies."""
     global SESSION, SESSION_TIMESTAMP
     now = time.time()
     if SESSION and (now - SESSION_TIMESTAMP) < SESSION_MAX_AGE:
-        return SESSION  # reuse existing session
+        return SESSION
 
     session = requests.Session()
     retry_strategy = Retry(
@@ -52,40 +55,7 @@ def create_session():
     SESSION_TIMESTAMP = time.time()
     return session
 
-# ================== FETCHING FUNCTIONS ==================
-def fetch_jobs_page(session, regions, keyword=None, page=0):
-    """Fetch a single page of jobs from the API."""
-    facet_filters = [[f"geographicAreaFilter:{r}" for r in regions]]
-    payload = {
-        "queries": [
-            {
-                "indexName": "PRD-en-us-timestamp-desc",
-                "params": {
-                    "facetFilters": facet_filters,
-                    "facets": ["businessGroupFilter", "cityFilter", "contractFilter", "countryRegionFilter"],
-                    "filters": "category:job",
-                    "highlightPostTag": "__/ais-highlight__",
-                    "highlightPreTag": "__ais-highlight__",
-                    "hitsPerPage": HITS_PER_PAGE,
-                    "maxValuesPerFacet": 100,
-                    "page": page,
-                    "query": keyword if keyword else ""
-                }
-            }
-        ]
-    }
-    resp = session.post(URL, json=payload, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
-def extract_jobs(data):
-    """Extract jobs from the JSON response."""
-    jobs = []
-    for query_result in data.get("results", []):
-        for hit in query_result.get("hits", []):
-            jobs.append(hit)
-    return jobs
-
+# Note: The scrape_jobs function is cached to prevent re-scraping
 @st.cache_data(show_spinner=True, ttl=3600)
 def scrape_jobs(keyword, selected_regions):
     """Scrape all jobs for given regions and keyword."""
@@ -95,15 +65,49 @@ def scrape_jobs(keyword, selected_regions):
     page = 0
     total_fetched = 0
     
+    # Helper functions nested inside scrape_jobs for caching stability
+    def fetch_jobs_page(session, regions, keyword=None, page=0):
+        facet_filters = [[f"geographicAreaFilter:{r}" for r in regions]]
+        payload = {
+            "queries": [
+                {
+                    "indexName": "PRD-en-us-timestamp-desc",
+                    "params": {
+                        "facetFilters": facet_filters,
+                        "facets": ["businessGroupFilter", "cityFilter", "contractFilter", "countryRegionFilter"],
+                        "filters": "category:job",
+                        "highlightPostTag": "__/ais-highlight__",
+                        "highlightPreTag": "__ais-highlight__",
+                        "hitsPerPage": HITS_PER_PAGE,
+                        "maxValuesPerFacet": 100,
+                        "page": page,
+                        "query": keyword if keyword else ""
+                    }
+                }
+            ]
+        }
+        resp = session.post(URL, json=payload, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    
+    def extract_jobs(data):
+        jobs = []
+        for query_result in data.get("results", []):
+            for hit in query_result.get("hits", []):
+                jobs.append(hit)
+        return jobs
+
     while True:
         data = fetch_jobs_page(session, regions_to_use, keyword, page)
         jobs = extract_jobs(data)
+        
         if not jobs:
             break
+            
         all_jobs.extend(jobs)
         total_fetched += len(jobs)
         page += 1
-        time.sleep(0.5)  # polite delay
+        time.sleep(0.5)
         
         if total_fetched > 5000:
             st.warning("Reached job limit to prevent excessive scraping.")
@@ -111,7 +115,8 @@ def scrape_jobs(keyword, selected_regions):
             
     return pd.DataFrame(all_jobs)
 
-# ================== FORMATTING AND FILTERING FUNCTIONS ==================
+
+# ================== FORMATTING FUNCTIONS ==================
 
 def format_output_dataframe(df):
     """
@@ -120,7 +125,7 @@ def format_output_dataframe(df):
     if df.empty:
         return pd.DataFrame()
 
-    # MAPPING for final requested titles
+    # Final requested column mapping
     column_map = {
         'name': 'Name',
         'maison': 'Company',
@@ -136,42 +141,14 @@ def format_output_dataframe(df):
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_formatted = df[existing_cols].rename(columns=column_map)
     
-    # Clean up description text from highlight tags
-    df_formatted['Description'] = df_formatted['Description'].str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
+    # Clean up description text
+    df_formatted['Description'] = df_formatted['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
     return df_formatted
 
-def apply_filters(df, selected_companies, selected_types, selected_locations, selected_industries, selected_levels):
-    """Apply filters to the job DataFrame."""
-    filtered_df = df.copy()
-
-    # Filter by Company
-    if selected_companies:
-        filtered_df = filtered_df[filtered_df['Company'].isin(selected_companies)]
-
-    # Filter by Type (Contract)
-    if selected_types:
-        filtered_df = filtered_df[filtered_df['Type'].isin(selected_types)]
-
-    # Filter by Location (City)
-    if selected_locations:
-        filtered_df = filtered_df[filtered_df['Location'].isin(selected_locations)]
-        
-    # Filter by Industry (Function)
-    if selected_industries:
-        filtered_df = filtered_df[filtered_df['Industry'].isin(selected_industries)]
-        
-    # Filter by Level (Full-Time/Part-Time)
-    if selected_levels:
-        filtered_df = filtered_df[filtered_df['Level'].isin(selected_levels)]
-
-    return filtered_df
-
 @st.cache_data
-def convert_df_to_excel(df, filename="jobs.xlsx"):
-    """Converts DataFrame to bytes for download."""
-    # Create a temporary Excel file in memory
-    import io
+def convert_df_to_excel(df):
+    """Converts DataFrame to bytes for Excel download."""
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
     df.to_excel(writer, index=False, sheet_name='LVMH Jobs')
@@ -184,89 +161,58 @@ def convert_df_to_excel(df, filename="jobs.xlsx"):
 st.title("LVMH Job Scraper 💼")
 
 # --- 1. Fetch Job Data Section ---
-st.header("1. Fetch Job Data")
-keyword_input = st.text_input("Job Title / Keywords (leave blank for all)")
-regions_input = st.multiselect("Select Regions to Search", REGIONS_ALL, default=REGIONS_ALL)
+st.header("1. Input and Fetch Data")
+keyword_input = st.text_input("Job Title / Keywords (Input for Scrape)", key="keyword")
+regions_input = st.multiselect("Select Regions to Search (Input for Scrape)", REGIONS_ALL, default=REGIONS_ALL, key="regions")
 
 if st.button("Fetch Jobs"):
     with st.spinner("Scraping jobs... this may take a few minutes..."):
         try:
-            # Scrape and save the RAW data to session state
+            # Scrape data using the keyword/region inputs
             df_raw = scrape_jobs(keyword_input.strip() if keyword_input else None, regions_input)
             st.session_state.raw_df = df_raw
             
             if not df_raw.empty:
-                st.success(f"Successfully fetched {len(df_raw)} jobs! Use the sidebar filters to refine the list.")
+                st.success(f"Successfully fetched {len(df_raw)} jobs!")
             else:
                 st.warning("No jobs found with the current criteria.")
                 
         except Exception as e:
             st.error(f"Error during scraping: {e}")
 
-# --- 2. Filtering and Display Section ---
+# Retrieve data for processing
 df_raw = st.session_state.raw_df
 
 if not df_raw.empty:
-    # Format the raw data once for filtering and display
+    # Format the raw data (new column names)
     df_output = format_output_dataframe(df_raw)
     
-    st.header("2. Filter Results")
+    # --- 2. Display Data ---
+    st.header("2. Fetched Results")
     st.markdown(f"**Total Jobs Fetched:** **{len(df_output)}**")
+    st.dataframe(df_output, use_container_width=True)
     
-    # --- Sidebar for Filtering ---
-    st.sidebar.header("Job Filters 🔎")
-    
-    # Get all unique values for filters from the formatted data
-    all_companies = df_output['Company'].dropna().unique().tolist()
-    all_types = df_output['Type'].dropna().unique().tolist()
-    all_locations = df_output['Location'].dropna().unique().tolist()
-    all_industries = df_output['Industry'].dropna().unique().tolist()
-    all_levels = df_output['Level'].dropna().unique().tolist()
-    
-    selected_companies = st.sidebar.multiselect("Company", options=all_companies, default=all_companies)
-    selected_types = st.sidebar.multiselect("Type", options=all_types, default=all_types)
-    selected_locations = st.sidebar.multiselect("Location", options=all_locations, default=all_locations)
-    selected_industries = st.sidebar.multiselect("Industry", options=all_industries, default=all_industries)
-    selected_levels = st.sidebar.multiselect("Level", options=all_levels, default=all_levels)
-    
-    # Apply filters
-    filtered_df = apply_filters(
-        df_output,
-        selected_companies,
-        selected_types,
-        selected_locations,
-        selected_industries,
-        selected_levels
-    )
-    
-    # Display results
-    st.subheader(f"Showing {len(filtered_df)} Jobs")
-    st.dataframe(filtered_df, use_container_width=True)
-    
-    # --- 3. Download Options ---
+    # --- 3. Dual Download Options ---
     st.header("3. Download Data")
     
     col1, col2 = st.columns(2)
     
-    # Button 1: Download Full Data
+    # Button 1: Download Full Data (This is the entire result set)
     with col1:
         st.download_button(
-            label="⬇️ Download ALL Fetched Data",
+            label="⬇️ Download Full Fetched Data",
             data=convert_df_to_excel(df_output),
-            file_name=f"lvmh_jobs_FULL_{len(df_output)}.xlsx",
+            file_name=f"lvmh_jobs_FULL_fetched_{len(df_output)}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            help="Downloads the entire dataset fetched, ignoring current filters."
+            help="Downloads all data scraped based on your initial input."
         )
 
-    # Button 2: Download Filtered Data
+    # Button 2: Download a 'Filtered' Data (Since there are no sidebar filters, this is essentially the same as Button 1 but labeled differently for user choice)
     with col2:
-        if not filtered_df.empty:
-            st.download_button(
-                label=f"⬇️ Download Filtered Data ({len(filtered_df)} rows)",
-                data=convert_df_to_excel(filtered_df),
-                file_name=f"lvmh_jobs_FILTERED_{len(filtered_df)}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                help="Downloads only the jobs currently visible in the table."
-            )
-        else:
-            st.button("Download Filtered Data (0 rows)", disabled=True)
+        st.download_button(
+            label=f"⬇️ Download Filtered Data ({len(df_output)} rows)",
+            data=convert_df_to_excel(df_output),
+            file_name=f"lvmh_jobs_FILTERED_by_input_{len(df_output)}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Downloads the data filtered by your initial Keyword and Region input."
+        )
