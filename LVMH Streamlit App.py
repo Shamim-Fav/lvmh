@@ -260,7 +260,7 @@ def create_zip_archive(df_raw, df_filtered):
 
 # ================== STREAMLIT UI ==================
 
-st.title("LVMH Job Scraper")
+st.title("💼 LVMH Job Scraper", # EMOJI ADDED HERE)
 
 # Inputs
 keyword_input = st.text_input("Job Title / Keywords (leave blank for all)")
@@ -300,6 +300,7 @@ if st.button("Fetch Jobs"):
                 st.warning("No jobs found.")
         except Exception as e:
             st.error(f"An error occurred during scraping: {e}")
+
 
 
 
