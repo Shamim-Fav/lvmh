@@ -97,14 +97,32 @@ def fix_encoding(text):
 
 # Function to select and rename the desired columns and apply encoding fix
 def create_filtered_df(df):
-    """Selects the desired columns, renames them, applies encoding correction, and adds blank columns."""
+    """Selects the desired columns, renames them, applies encoding correction, adds blank columns, and creates the Slug."""
     if df.empty:
         return pd.DataFrame()
 
-    # Apply Encoding Fix to known problematic columns
+    # Apply Encoding Fix to known problematic columns (must happen BEFORE slug creation)
     for col in ['city', 'description', 'name']:
         if col in df.columns:
             df[col] = df[col].apply(fix_encoding)
+            
+    # --- NEW SLUG CREATION ---
+    # 1. Ensure 'name', 'maison', and 'city' exist and are strings for concatenation
+    if 'name' in df.columns and 'maison' in df.columns and 'city' in df.columns:
+        # Get the first word of the 'name' column
+        first_name_part = df['name'].astype(str).str.split(' ').str[0]
+        
+        # Combine the parts, convert to lowercase, and replace spaces/special characters with hyphens
+        df['Slug'] = (first_name_part.str.lower() + '-' + 
+                      df['maison'].astype(str).str.lower() + '-' + 
+                      df['city'].astype(str).str.lower())
+        
+        # Clean the slug by replacing any non-alphanumeric/non-hyphen characters
+        df['Slug'] = df['Slug'].str.replace(r'[^a-z0-9\-]+', '', regex=True)
+        df['Slug'] = df['Slug'].str.replace(r'[\-]+', '-', regex=True)
+        
+    else:
+        df['Slug'] = '' # Add blank column if source columns are missing
 
     # MAPPING for final requested titles
     column_map = {
@@ -115,14 +133,15 @@ def create_filtered_df(df):
         'city': 'Location',
         'functionFilter': 'Industry',
         'fullTimePartTime': 'Level',
-        'link': 'Apply URL'
+        'link': 'Apply URL',
+        'Slug': 'Slug' # Add the new Slug column to the map
     }
     
     # 1. Filter existing columns and rename
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_filtered = df[existing_cols].rename(columns=column_map)
     
-    # 2. Add the NEW BLANK columns
+    # 2. Add the BLANK columns (as before)
     blank_columns = [
         'Salary Range', 'Access', 'Salary', 'Deadline', 'Collection ID', 
         'Locale ID', 'Item ID', 'Archived', 'Draft', 'Created On', 
@@ -130,7 +149,6 @@ def create_filtered_df(df):
     ]
     
     for col_name in blank_columns:
-        # Initializing new columns with empty strings
         df_filtered[col_name] = '' 
     
     # Clean up highlight tags from description
