@@ -6,7 +6,7 @@ from urllib3.util.retry import Retry
 import time
 import io
 
-# ================== CONFIG ==================
+# ================== CONFIG (unchanged) ==================
 URL = "https://www.lvmh.com/api/search"
 HEADERS = {
     "accept": "*/*",
@@ -19,9 +19,11 @@ HEADERS = {
 REGIONS_ALL = ["America", "Asia Pacific", "Europe", "Middle East / Africa"]
 HITS_PER_PAGE = 50
 
-# ================== FUNCTIONS ==================
+# ================== SCRAPING AND UTILITY FUNCTIONS (unchanged) ==================
+# ... (create_session, fetch_jobs_page, extract_jobs, scrape_jobs remain as in the last successful script)
 
 def create_session():
+    # ... (function body remains the same)
     session = requests.Session()
     retry_strategy = Retry(
         total=5,
@@ -32,12 +34,11 @@ def create_session():
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("https://", adapter)
     session.headers.update(HEADERS)
-    # Refresh cookies by visiting the job offers page
     session.get("https://www.lvmh.com/en/join-us/our-job-offers", timeout=30)
     return session
 
 def fetch_jobs_page(session, regions, keyword=None, page=0):
-    # Ensure regions are correctly formatted for the API call
+    # ... (function body remains the same)
     facet_filters = [[f"geographicAreaFilter:{r}" for r in regions]]
     payload = {
         "queries": [
@@ -62,6 +63,7 @@ def fetch_jobs_page(session, regions, keyword=None, page=0):
     return resp.json()
 
 def extract_jobs(data):
+    # ... (function body remains the same)
     jobs = []
     for query_result in data.get("results", []):
         for hit in query_result.get("hits", []):
@@ -69,6 +71,7 @@ def extract_jobs(data):
     return jobs
 
 def scrape_jobs(keyword, selected_regions, progress_bar=None):
+    # ... (function body remains the same)
     session = create_session()
     all_jobs = []
     regions_to_use = selected_regions if selected_regions else REGIONS_ALL
@@ -87,26 +90,31 @@ def scrape_jobs(keyword, selected_regions, progress_bar=None):
         time.sleep(0.5)
     return pd.DataFrame(all_jobs)
 
-# NEW: Encoding Fix Function
+
+# ================== MODIFIED ENCODING AND FORMATTING FUNCTIONS ==================
+
+# *** MODIFIED FIX_ENCODING FUNCTION ***
 def fix_encoding(text):
-    """Attempts to fix double-encoded UTF-8 strings like 'MahÃ©'."""
+    """Attempts to fix double-encoded UTF-8 strings like 'MahÃ©' using a byte swap."""
     if isinstance(text, str):
         try:
-            # Common fix: decode from the misinterpreted encoding (often Latin-1) back to the correct UTF-8 string
-            return text.encode('latin-1').decode('utf-8')
+            # 1. Encode the current (bad) Python string into bytes using Latin-1.
+            # 2. Decode those bytes back into a Python string using UTF-8.
+            # This correctly interprets the two bytes that were incorrectly decoded as two characters.
+            return text.encode('latin1').decode('utf8')
         except (UnicodeDecodeError, UnicodeEncodeError):
             return text
     return text
 
-# NEW: Function to select and rename the desired columns and apply encoding fix
 def create_filtered_df(df):
     """Selects the desired columns, renames them, and applies encoding correction."""
     if df.empty:
         return pd.DataFrame()
 
-    # Apply Encoding Fix to known problematic columns before renaming
+    # Apply Encoding Fix to known problematic columns
     for col in ['city', 'description', 'name']:
         if col in df.columns:
+            # Use .str.replace for fast, vectorized cleaning of the entire Series
             df[col] = df[col].apply(fix_encoding)
 
     # MAPPING for final requested titles
@@ -125,7 +133,7 @@ def create_filtered_df(df):
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_filtered = df[existing_cols].rename(columns=column_map)
     
-    # Clean up highlight tags from description (using the already fixed description column)
+    # Clean up highlight tags from description
     if 'Description' in df_filtered.columns:
         df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
@@ -134,10 +142,10 @@ def create_filtered_df(df):
 @st.cache_data
 def convert_df_to_csv(df):
     """Converts DataFrame to CSV for download, explicitly using UTF-8."""
-    # Crucial for preserving characters like 'é' in the downloaded file
+    # Explicitly using UTF-8 here is CRITICAL for the downloaded file to be correct
     return df.to_csv(index=False, encoding='utf-8').encode('utf-8')
 
-# ================== STREAMLIT UI ==================
+# ================== STREAMLIT UI (MODIFIED TO APPLY FIX TO RAW DATA TOO) ==================
 st.title("LVMH Job Scraper with Dual Download")
 
 # Inputs
@@ -167,8 +175,7 @@ if st.button("Fetch Jobs"):
                 
                 # Download Button 1: Full Data (Original columns)
                 with col1:
-                    # NOTE: We use df_raw for the full file, but it must still be passed through the
-                    # encoding fix for the downloaded file to be correct.
+                    # Apply encoding fix to df_raw just for the download file
                     df_raw_fixed = df_raw.copy()
                     for col in ['city', 'description', 'name']:
                         if col in df_raw_fixed.columns:
