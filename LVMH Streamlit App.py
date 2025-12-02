@@ -12,7 +12,7 @@ import numpy as np # For conditional logic (np.where)
 # Set the page icon (favicon) and title
 st.set_page_config(
     page_title="LVMH Job Scraper", 
-    page_icon="💼", # Using the briefcase emoji
+    page_icon="💼" # Using the briefcase emoji
 )
 
 # ================== CONFIG ==================
@@ -300,6 +300,7 @@ if st.button("Fetch Jobs"):
                 st.warning("No jobs found.")
         except Exception as e:
             st.error(f"An error occurred during scraping: {e}")
+
 
 
 
