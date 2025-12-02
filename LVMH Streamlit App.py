@@ -5,6 +5,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
 import io
+import numpy as np # <-- ADD THIS LINE
 
 # ================== CONFIG ==================
 URL = "https://www.lvmh.com/api/search"
@@ -99,17 +100,35 @@ def fix_encoding(text):
 def create_filtered_df(df):
     """
     Selects the desired columns, renames them, applies encoding correction, adds blank columns, 
-    and creates the Slug using the first two words of the Name.
+    creates the Slug, and prioritizes 'profile' data for the Description column.
     """
     if df.empty:
         return pd.DataFrame()
 
-    # Apply Encoding Fix to known problematic columns (must happen BEFORE slug creation)
-    for col in ['city', 'description', 'name']:
+    # Apply Encoding Fix to known problematic columns (must happen BEFORE description and slug logic)
+    for col in ['city', 'description', 'name', 'profile']:
         if col in df.columns:
             df[col] = df[col].apply(fix_encoding)
             
-    # --- NEW SLUG CREATION ---
+    # --- DESCRIPTION PRIORITY FIX ---
+    # Goal: Use 'profile' content if available, otherwise use original 'description'.
+    if 'profile' in df.columns and 'description' in df.columns:
+        # 1. Ensure 'profile' and 'description' are treated as strings
+        df['profile'] = df['profile'].astype(str)
+        df['description'] = df['description'].astype(str)
+        
+        # 2. Use np.where to conditionally replace the 'description' column content
+        # Check if 'profile' is NOT an empty string after cleaning whitespace
+        import numpy as np
+        
+        # NOTE: np.where is an efficient way to apply if/else logic across a DataFrame Series.
+        df['description'] = np.where(
+            df['profile'].str.strip() != '', # Condition: Is 'profile' not blank?
+            df['profile'],                   # If True: Use 'profile' content
+            df['description']                # If False: Keep original 'description' content
+        )
+
+    # --- SLUG CREATION (Unchanged Logic) ---
     if 'name' in df.columns and 'maison' in df.columns and 'city' in df.columns:
         
         # 1. Clean and Prepare Components
@@ -119,35 +138,30 @@ def create_filtered_df(df):
         
         # 2. Get the First TWO words of the 'name' column
         def get_first_two_words(name_str):
-            # Split the string by space and take the first two elements, then join them with a space
             words = name_str.split(' ')
             return ' '.join(words[:2])
 
-        # Apply the function to the cleaned Name series
         first_two_name_parts = cleaned_name.apply(get_first_two_words)
         
-        # 3. Combine the parts using a hyphen and convert to lowercase
+        # 3. Combine the parts
         df['Slug'] = (first_two_name_parts.str.lower() + '-' + 
                       cleaned_maison.str.lower() + '-' + 
                       cleaned_city.str.lower())
         
-        # 4. Clean the slug: 
-        #    a) Replace any character that is NOT a lowercase letter, number, or hyphen with a hyphen.
+        # 4. Clean the slug
         df['Slug'] = df['Slug'].str.replace(r'[^a-z0-9\-]+', '-', regex=True)
-        #    b) Replace any occurrence of two or more hyphens with a single hyphen.
         df['Slug'] = df['Slug'].str.replace(r'[\-]+', '-', regex=True)
-        #    c) Remove any leading or trailing hyphens from the final slug.
         df['Slug'] = df['Slug'].str.strip('-')
         
     else:
-        df['Slug'] = '' # Add blank column if source columns are missing
+        df['Slug'] = '' 
 
     # MAPPING for final requested titles
     column_map = {
         'name': 'Name',
         'maison': 'Company',
         'contract': 'Type',
-        'description': 'Description',
+        'description': 'Description', # This column now holds the prioritized description!
         'city': 'Location',
         'functionFilter': 'Industry',
         'fullTimePartTime': 'Level',
@@ -159,7 +173,7 @@ def create_filtered_df(df):
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_filtered = df[existing_cols].rename(columns=column_map)
     
-    # 2. Add the BLANK columns (as before)
+    # 2. Add the BLANK columns
     blank_columns = [
         'Salary Range', 'Access', 'Salary', 'Deadline', 'Collection ID', 
         'Locale ID', 'Item ID', 'Archived', 'Draft', 'Created On', 
@@ -169,8 +183,9 @@ def create_filtered_df(df):
     for col_name in blank_columns:
         df_filtered[col_name] = '' 
     
-    # Clean up highlight tags from description
+    # Clean up highlight tags from the final Description column
     if 'Description' in df_filtered.columns:
+        # Note: The description column now holds either the original or the 'profile' data.
         df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
     return df_filtered
