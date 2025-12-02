@@ -97,7 +97,10 @@ def fix_encoding(text):
 
 # Function to select and rename the desired columns and apply encoding fix
 def create_filtered_df(df):
-    """Selects the desired columns, renames them, applies encoding correction, adds blank columns, and creates the Slug."""
+    """
+    Selects the desired columns, renames them, applies encoding correction, adds blank columns, 
+    and creates the Slug using the first two words of the Name.
+    """
     if df.empty:
         return pd.DataFrame()
 
@@ -107,19 +110,34 @@ def create_filtered_df(df):
             df[col] = df[col].apply(fix_encoding)
             
     # --- NEW SLUG CREATION ---
-    # 1. Ensure 'name', 'maison', and 'city' exist and are strings for concatenation
     if 'name' in df.columns and 'maison' in df.columns and 'city' in df.columns:
-        # Get the first word of the 'name' column
-        first_name_part = df['name'].astype(str).str.split(' ').str[0]
         
-        # Combine the parts, convert to lowercase, and replace spaces/special characters with hyphens
-        df['Slug'] = (first_name_part.str.lower() + '-' + 
-                      df['maison'].astype(str).str.lower() + '-' + 
-                      df['city'].astype(str).str.lower())
+        # 1. Clean and Prepare Components
+        cleaned_name = df['name'].astype(str).str.strip()
+        cleaned_maison = df['maison'].astype(str).str.strip()
+        cleaned_city = df['city'].astype(str).str.strip()
         
-        # Clean the slug by replacing any non-alphanumeric/non-hyphen characters
-        df['Slug'] = df['Slug'].str.replace(r'[^a-z0-9\-]+', '', regex=True)
+        # 2. Get the First TWO words of the 'name' column
+        def get_first_two_words(name_str):
+            # Split the string by space and take the first two elements, then join them with a space
+            words = name_str.split(' ')
+            return ' '.join(words[:2])
+
+        # Apply the function to the cleaned Name series
+        first_two_name_parts = cleaned_name.apply(get_first_two_words)
+        
+        # 3. Combine the parts using a hyphen and convert to lowercase
+        df['Slug'] = (first_two_name_parts.str.lower() + '-' + 
+                      cleaned_maison.str.lower() + '-' + 
+                      cleaned_city.str.lower())
+        
+        # 4. Clean the slug: 
+        #    a) Replace any character that is NOT a lowercase letter, number, or hyphen with a hyphen.
+        df['Slug'] = df['Slug'].str.replace(r'[^a-z0-9\-]+', '-', regex=True)
+        #    b) Replace any occurrence of two or more hyphens with a single hyphen.
         df['Slug'] = df['Slug'].str.replace(r'[\-]+', '-', regex=True)
+        #    c) Remove any leading or trailing hyphens from the final slug.
+        df['Slug'] = df['Slug'].str.strip('-')
         
     else:
         df['Slug'] = '' # Add blank column if source columns are missing
@@ -134,7 +152,7 @@ def create_filtered_df(df):
         'functionFilter': 'Industry',
         'fullTimePartTime': 'Level',
         'link': 'Apply URL',
-        'Slug': 'Slug' # Add the new Slug column to the map
+        'Slug': 'Slug'
     }
     
     # 1. Filter existing columns and rename
