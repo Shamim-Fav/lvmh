@@ -97,7 +97,7 @@ def fix_encoding(text):
 
 # Function to select and rename the desired columns and apply encoding fix
 def create_filtered_df(df):
-    """Selects the desired columns, renames them, and applies encoding correction."""
+    """Selects the desired columns, renames them, applies encoding correction, and adds blank columns."""
     if df.empty:
         return pd.DataFrame()
 
@@ -118,9 +118,22 @@ def create_filtered_df(df):
         'link': 'Apply URL'
     }
     
+    # 1. Filter existing columns and rename
     existing_cols = [col for col in column_map.keys() if col in df.columns]
     df_filtered = df[existing_cols].rename(columns=column_map)
     
+    # 2. Add the NEW BLANK columns
+    blank_columns = [
+        'Salary Range', 'Access', 'Salary', 'Deadline', 'Collection ID', 
+        'Locale ID', 'Item ID', 'Archived', 'Draft', 'Created On', 
+        'Updated On', 'Published On', 'CMS ID'
+    ]
+    
+    for col_name in blank_columns:
+        # Initializing new columns with empty strings
+        df_filtered[col_name] = '' 
+    
+    # Clean up highlight tags from description
     if 'Description' in df_filtered.columns:
         df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
     
