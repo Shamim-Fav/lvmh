@@ -8,8 +8,7 @@ import numpy as np
 
 # --- CRITICAL FIX: Ensure this is the first Streamlit command ---
 st.set_page_config(
-    page_title="💼 LVMH Job Scraper", 
-    page_icon="💼"
+    page_title="💼 LVMH Job Scraper"
 )
 # ---------------------------------------------------------------
 
@@ -245,3 +244,4 @@ if st.button("Fetch Jobs"):
 
         except Exception as e:
             st.error(f"An error occurred during scraping: {e}")
+
