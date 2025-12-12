@@ -153,8 +153,8 @@ def create_filtered_df(df):
         cleaned_maison = df['maison'].astype(str).str.strip()
         cleaned_name = df['name'].astype(str).str.strip()
         cleaned_city = df['city'].astype(str).str.strip()
-        df['Slug'] = (cleaned_name.str.lower().str.replace(' ', '-') + '-' +
-                      cleaned_maison.str.lower().str.replace(' ', '-') + '-' +
+        df['Slug'] = (cleaned_maison.str.lower().str.replace(' ', '-') + '-' +
+                      cleaned_name.str.lower().str.replace(' ', '-') + '-' +
                       cleaned_city.str.lower().str.replace(' ', '-'))
         df['Slug'] = df['Slug'].str.replace(r'[^a-z0-9\-]+', '-', regex=True)
         df['Slug'] = df['Slug'].str.replace(r'[\-]+', '-', regex=True).str.strip('-')
@@ -244,5 +244,6 @@ if st.button("Fetch Jobs"):
 
         except Exception as e:
             st.error(f"An error occurred during scraping: {e}")
+
 
 
