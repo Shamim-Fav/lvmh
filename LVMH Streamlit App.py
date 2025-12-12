@@ -150,8 +150,8 @@ def create_filtered_df(df):
 
     # Slug creation
     if 'name' in df.columns and 'maison' in df.columns and 'city' in df.columns:
-        cleaned_name = df['name'].astype(str).str.strip()
         cleaned_maison = df['maison'].astype(str).str.strip()
+        cleaned_name = df['name'].astype(str).str.strip()
         cleaned_city = df['city'].astype(str).str.strip()
         df['Slug'] = (cleaned_name.str.lower().str.replace(' ', '-') + '-' +
                       cleaned_maison.str.lower().str.replace(' ', '-') + '-' +
@@ -244,4 +244,5 @@ if st.button("Fetch Jobs"):
 
         except Exception as e:
             st.error(f"An error occurred during scraping: {e}")
+
 
