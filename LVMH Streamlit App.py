@@ -4,10 +4,7 @@ import pandas as pd
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
-import io
-import zipfile
-import ast 
-import numpy as np 
+import numpy as np
 
 # --- CRITICAL FIX: Ensure this is the first Streamlit command ---
 st.set_page_config(
@@ -31,7 +28,7 @@ def create_session():
     global SESSION, SESSION_TIMESTAMP
     now = time.time()
     if SESSION and (now - SESSION_TIMESTAMP) < SESSION_MAX_AGE:
-        return SESSION # reuse existing session
+        return SESSION  # reuse existing session
 
     session = requests.Session()
     retry_strategy = Retry(
@@ -94,8 +91,8 @@ def extract_jobs(data):
             jobs.append(hit)
     return jobs
 
-@st.cache_data(ttl=3600) # Cache the scraped data for 1 hour
-def scrape_jobs(keyword, selected_regions, _progress_bar=None): # ⬅️ FIX APPLIED HERE
+@st.cache_data(ttl=3600)  # Cache the scraped data for 1 hour
+def scrape_jobs(keyword, selected_regions, _progress_bar=None):
     """Scrape all jobs for given regions and keyword, with optional progress bar."""
     session = create_session()
     all_jobs = []
@@ -110,10 +107,9 @@ def scrape_jobs(keyword, selected_regions, _progress_bar=None): # ⬅️ FIX APP
         all_jobs.extend(jobs)
         total_fetched += len(jobs)
         page += 1
-        if _progress_bar: # ⬅️ CALL SITE UPDATED HERE
-            # Note: This progress bar uses a crude estimate for max total jobs (2500)
+        if _progress_bar:
             _progress_bar.progress(min(total_fetched / 2500, 1.0))
-        time.sleep(0.5) # polite delay
+        time.sleep(0.5)  # polite delay
     return pd.DataFrame(all_jobs)
 
 # -------------------------------------------------------------------
@@ -129,186 +125,37 @@ def fix_encoding(text):
     return text
 
 def create_filtered_df(df):
-    """
-    Applies all cleaning, merging, slug creation, column renaming logic,
-    and sets the final column order.
-    """
+    """Applies all cleaning, merging, slug creation, column renaming logic, and sets final column order."""
     if df.empty:
         return pd.DataFrame()
 
-    # Apply Encoding Fix to known problematic columns
     for col in ['city', 'description', 'name', 'profile', 'jobResponsabilities', 'salary']:
         if col in df.columns:
             df[col] = df[col].apply(fix_encoding)
-    
-    # --- RAW SALARY MAPPING ---
-    if 'salary' in df.columns:
-        df['Salary Range'] = df['salary'] # Direct copy of the raw data
-    else:
-        df['Salary Range'] = '' 
 
-    # --- FULL DESCRIPTION MERGE ---
+    df['Salary Range'] = df['salary'] if 'salary' in df.columns else ''
+
+    # Merge full description
     if 'profile' in df.columns and 'jobResponsabilities' in df.columns and 'description' in df.columns:
-        df['FullDescription'] = '' 
-        source_cols = ['profile', 'jobResponsabilities', 'description']
-        
-        for col in source_cols:
+        df['FullDescription'] = ''
+        for col in ['profile', 'jobResponsabilities', 'description']:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.strip()
-                
-                df['FullDescription'] = np.where(
-                    (df[col] != ''),
-                    df['FullDescription'] + "\n\n--- " + col.upper() + " ---\n" + df[col],
-                    df['FullDescription']
-                )
-
+                df['FullDescription'] += "\n\n--- " + col.upper() + " ---\n" + df[col]
         df['description'] = df['FullDescription'].str.strip()
-    
-    # --- FORMULA/LIST ESCAPE FIX ---
-    # Prepend ' to prevent CSV/Excel from interpreting list starters (like '-') as formulas
+
+    # Prevent formula interpretation in Excel
     if 'description' in df.columns:
-        df['description'] = np.where(
-            df['description'].str.startswith(('=', '+', '-')),
-            "'" + df['description'],
-            df['description']
-        )
-    
-    # --- SLUG CREATION ---
+        df['description'] = np.where(df['description'].str.startswith(('=', '+', '-')),
+                                     "'" + df['description'], df['description'])
+
+    # Slug creation
     if 'name' in df.columns and 'maison' in df.columns and 'city' in df.columns:
         cleaned_name = df['name'].astype(str).str.strip()
         cleaned_maison = df['maison'].astype(str).str.strip()
         cleaned_city = df['city'].astype(str).str.strip()
-        
-        def get_first_two_words(name_str):
-            # Gets the first two words of the name, joined by a space
-            words = name_str.split(' ')
-            return ' '.join(words[:2])
-
-        first_two_name_parts = cleaned_name.apply(get_first_two_words)
-        
-        df['Slug'] = (first_two_name_parts.str.lower() + '-' + 
-                      cleaned_maison.str.lower() + '-' + 
-                      cleaned_city.str.lower())
-        
+        df['Slug'] = (cleaned_name.str.lower().str.replace(' ', '-') + '-' +
+                      cleaned_maison.str.lower().str.replace(' ', '-') + '-' +
+                      cleaned_city.str.lower().str.replace(' ', '-'))
         df['Slug'] = df['Slug'].str.replace(r'[^a-z0-9\-]+', '-', regex=True)
-        df['Slug'] = df['Slug'].str.replace(r'[\-]+', '-', regex=True)
-        df['Slug'] = df['Slug'].str.strip('-')
-    else:
-        df['Slug'] = '' 
-
-    # MAPPING for final requested titles
-    column_map = {
-        'name': 'Name',
-        'maison': 'Company',
-        'contract': 'Type',
-        'description': 'Description',
-        'city': 'Location',
-        'functionFilter': 'Industry',
-        'fullTimePartTime': 'Level',
-        'link': 'Apply URL',
-        'Slug': 'Slug',
-        'Salary Range': 'Salary Range' 
-    }
-    
-    # 1. Select existing columns based on the map and rename
-    existing_cols = [col for col in column_map.keys() if col in df.columns]
-    df_filtered = df[existing_cols].rename(columns=column_map)
-    
-    # 2. Add the BLANK columns
-    blank_columns_and_defaults = {
-        'Collection ID': '', 'Locale ID': '', 'Item ID': '', 'Archived': '', 
-        'Draft': '', 'Created On': '', 'Updated On': '', 'Published On': '', 
-        'CMS ID': '', 'Access': '', 'Salary': '', 'Deadline': '',
-    }
-    
-    for col_name, default_value in blank_columns_and_defaults.items():
-        if col_name not in df_filtered.columns:
-             df_filtered[col_name] = default_value
-    
-    # Clean up highlight tags (keeping other HTML/BR tags)
-    if 'Description' in df_filtered.columns:
-        df_filtered['Description'] = df_filtered['Description'].astype(str).str.replace('__ais-highlight__', '').str.replace('__/ais-highlight__', '')
-    
-    # --- 🎯 FINAL STEP: SET THE COLUMN ORDER ---
-    final_column_order = [
-        'Name', 'Slug', 'Collection ID', 'Locale ID', 'Item ID', 'Archived', 
-        'Draft', 'Created On', 'Updated On', 'Published On', 'CMS ID', 
-        'Company', 'Type', 'Description', 'Salary Range', 'Access', 
-        'Location', 'Industry', 'Level', 'Salary', 'Deadline', 'Apply URL'
-    ]
-    
-    # Only select columns that exist
-    ordered_cols = [col for col in final_column_order if col in df_filtered.columns]
-    
-    return df_filtered[ordered_cols]
-
-@st.cache_data
-def convert_df_to_csv(df):
-    """Converts DataFrame to CSV for download, using UTF-8-SIG for Excel compatibility."""
-    return df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
-
-@st.cache_data
-def create_zip_archive(df_raw, df_filtered):
-    """Creates a single ZIP file containing both the full raw CSV and the filtered CSV."""
-    zip_io = io.BytesIO()
-
-    with zipfile.ZipFile(zip_io, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
-        # File 1: Full Raw Data CSV (Apply encoding fix to the raw data)
-        df_raw_fixed = df_raw.copy()
-        for col in ['city', 'description', 'name']:
-            if col in df_raw_fixed.columns:
-                df_raw_fixed[col] = df_raw_fixed[col].apply(fix_encoding)
-        
-        full_csv = convert_df_to_csv(df_raw_fixed)
-        zf.writestr('lvmh_jobs_FULL_RAW.csv', full_csv)
-
-        # File 2: Filtered Data CSV
-        filtered_csv = convert_df_to_csv(df_filtered)
-        zf.writestr('lvmh_jobs_FILTERED_CLEAN.csv', filtered_csv)
-
-    zip_io.seek(0)
-    return zip_io.read()
-
-# -------------------------------------------------------------------
-## 💻 Streamlit UI
-
-st.title("💼 LVMH Job Scraper") # EMOJI in the main app title
-
-# Inputs
-keyword_input = st.text_input("Job Title / Keywords (leave blank for all)")
-regions_input = st.multiselect("Select Regions", REGIONS_ALL, default=REGIONS_ALL)
-
-if st.button("Fetch Jobs"):
-    progress_bar = st.progress(0)
-    with st.spinner("Scraping jobs... this may take a few minutes..."):
-        try:
-            # Scraping (Passing the progress_bar with underscore)
-            df_raw = scrape_jobs(keyword_input.strip() if keyword_input else None, regions_input, _progress_bar=progress_bar) # ⬅️ CALL SITE UPDATED HERE
-            progress_bar.empty()
-            
-            if not df_raw.empty:
-                st.success(f"Found {len(df_raw)} jobs!")
-                
-                # Processing
-                df_filtered = create_filtered_df(df_raw.copy()) 
-                
-                # Display 
-                st.dataframe(df_filtered, use_container_width=True) 
-                
-                # Download
-                st.subheader("Single-Click Download")
-                zip_data = create_zip_archive(df_raw, df_filtered)
-
-                st.download_button(
-                    "Download All Data (ZIP)", 
-                    data=zip_data, 
-                    file_name="lvmh_jobs_data.zip",
-                    mime="application/zip",
-                    help="Downloads a single ZIP file containing both the FULL RAW CSV and the CLEAN FILTERED CSV."
-                )
-                    
-            else:
-                st.warning("No jobs found. Try different search criteria.")
-        except Exception as e:
-            st.error(f"An error occurred during scraping: {e}")
-
+        df['Slug'] = df['Slug'].str.replace(r'[\-]+', '-', regex=True).str.strip('-')
